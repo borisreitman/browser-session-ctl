@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>Browser Automate</h1>
+    <p class="status" id="status">Checking…</p>
+    <p class="hint" id="hint"></p>
+    <label>
+      Sidecar port
+      <input id="port" type="number" min="1" max="65535" value="8765" />
+    </label>
+    <button id="reconnect" type="button">Reconnect</button>
+    <script src="popup.js"></script>
+  </body>
+</html>

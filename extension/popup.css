@@ -1,0 +1,50 @@
+:root {
+  color-scheme: light dark;
+  font: 13px/1.4 system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  width: 280px;
+  padding: 14px;
+}
+
+h1 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+
+.status {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.status.ok {
+  color: #1a7f37;
+}
+
+.status.bad {
+  color: #cf222e;
+}
+
+.hint {
+  margin: 0 0 12px;
+  color: #656d76;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+input,
+button {
+  font: inherit;
+}
+
+button {
+  width: 100%;
+  padding: 6px 8px;
+}

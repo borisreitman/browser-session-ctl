@@ -1,0 +1,21 @@
+{
+  "name": "browser-automate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Drive your current Chrome session from the shell",
+  "license": "GPL-3.0-or-later",
+  "bin": {
+    "browser-ctl": "./sidecar/cli.mjs"
+  },
+  "scripts": {
+    "start": "node sidecar/server.mjs",
+    "ctl": "node sidecar/cli.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

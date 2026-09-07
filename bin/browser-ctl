@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Run browser-automate's CLI via npm in the project folder, from any cwd.
+set -euo pipefail
+
+DEFAULT_ROOT="/Users/boris/work/experiment/browser-automate"
+
+resolve_root() {
+  if [[ -n "${BROWSER_AUTOMATE_ROOT:-}" ]]; then
+    printf '%s\n' "$BROWSER_AUTOMATE_ROOT"
+    return
+  fi
+
+  local source="${BASH_SOURCE[0]}"
+  local dir
+  if [[ -L "$source" ]]; then
+    dir="$(cd "$(dirname "$source")" && cd "$(dirname "$(readlink "$source")")" && pwd)"
+  else
+    dir="$(cd "$(dirname "$source")" && pwd)"
+  fi
+
+  if [[ -f "$dir/../package.json" ]]; then
+    cd "$dir/.." && pwd
+    return
+  fi
+  if [[ -f "$dir/package.json" ]]; then
+    printf '%s\n' "$dir"
+    return
+  fi
+
+  printf '%s\n' "$DEFAULT_ROOT"
+}
+
+ROOT="$(resolve_root)"
+if [[ ! -f "$ROOT/package.json" ]]; then
+  printf 'browser-ctl: project not found at %s\n' "$ROOT" >&2
+  exit 1
+fi
+
+cd "$ROOT"
+exec npm run --silent ctl -- "$@"
