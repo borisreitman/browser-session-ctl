@@ -299,7 +299,7 @@
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!message || message.source !== "browser-automate") return;
+    if (!message || message.source !== "browser-session-ctl") return;
     try {
       let result;
       switch (message.action) {

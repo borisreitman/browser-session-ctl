@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Run browser-automate's CLI via npm in the project folder, from any cwd.
+# Run browser-session-ctl via npm in the project folder, from any cwd.
 set -euo pipefail
 
 DEFAULT_ROOT="/Users/boris/work/experiment/browser-automate"
 
 resolve_root() {
-  if [[ -n "${BROWSER_AUTOMATE_ROOT:-}" ]]; then
-    printf '%s\n' "$BROWSER_AUTOMATE_ROOT"
+  if [[ -n "${BROWSER_SESSION_CTL_ROOT:-}" ]]; then
+    printf '%s\n' "$BROWSER_SESSION_CTL_ROOT"
     return
   fi
 
@@ -32,7 +32,7 @@ resolve_root() {
 
 ROOT="$(resolve_root)"
 if [[ ! -f "$ROOT/package.json" ]]; then
-  printf 'browser-ctl: project not found at %s\n' "$ROOT" >&2
+  printf 'browser-session-ctl: project not found at %s\n' "$ROOT" >&2
   exit 1
 fi
 

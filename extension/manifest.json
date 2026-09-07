@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Browser Automate",
-  "version": "0.1.1",
+  "name": "browser-session-ctl",
+  "version": "0.1.2",
   "description": "Lets a local agent drive this Chrome session on any website.",
   "permissions": [
     "tabs",
@@ -17,7 +17,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Browser Automate",
+    "default_title": "browser-session-ctl",
     "default_popup": "popup.html"
   },
   "content_scripts": [

@@ -1,4 +1,4 @@
-# Browser Automate
+# browser-session-ctl
 
 Drive the Chrome window you already have open from the shell — including third-party sites you do not own.
 
@@ -54,7 +54,7 @@ In the Agent profile window:
 3. Click **Load unpacked** (top left). Do not click **Update** — that button checks the Chrome Web Store and will not load this folder.
 4. Select the `extension/` directory in this repo (the folder that contains `manifest.json`, not the repo root).
 5. Chrome will warn that the extension can read and change all your data on all websites. That is required for third-party sites. Allow it only on a machine you trust.
-6. Confirm the card says **Browser Automate** and the toggle is on.
+6. Confirm the card says **browser-session-ctl** and the toggle is on.
 
 After you change extension files later, click the circular **reload** arrow on that card (next to the on/off switch). The version in `extension/manifest.json` should match the version on the card. **Update** at the top of the page is the wrong button.
 
@@ -79,41 +79,41 @@ You want:
 
 If `extensionConnected` is `false`, the sidecar is not running, the extension is disabled, or you still need to reload the unpacked build.
 
-There is no **Reconnect** button on `chrome://extensions`. That page only has Details, Remove, Errors, and the reload arrow. Reconnect lives in the toolbar popup: puzzle-piece icon → pin **Browser Automate** → click the icon. You usually do not need it. Connection happens on its own once both the sidecar and the extension are running.
+There is no **Reconnect** button on `chrome://extensions`. That page only has Details, Remove, Errors, and the reload arrow. Reconnect lives in the toolbar popup: puzzle-piece icon → pin **browser-session-ctl** → click the icon. You usually do not need it. Connection happens on its own once both the sidecar and the extension are running.
 
 The toolbar badge shows **on** or **off**.
 
 ## Global command
 
-`bin/browser-ctl` runs `npm run ctl` in this repo, from any working directory. Copy it to `~/bin`:
+`bin/browser-session-ctl` runs `npm run ctl` in this repo, from any working directory. Copy it to `~/bin`:
 
 ```bash
-cp bin/browser-ctl ~/bin/browser-ctl
-chmod +x ~/bin/browser-ctl
+cp bin/browser-session-ctl ~/bin/browser-session-ctl
+chmod +x ~/bin/browser-session-ctl
 ```
 
 Then, from anywhere:
 
 ```bash
-browser-ctl status
-browser-ctl snapshot
+browser-session-ctl status
+browser-session-ctl snapshot
 ```
 
-The script looks for this project at `/Users/boris/work/experiment/browser-automate`, or at `$BROWSER_AUTOMATE_ROOT` if you set that. `~/bin` must be on your `PATH`.
+The script looks for this project at `/Users/boris/work/experiment/browser-automate`, or at `$BROWSER_SESSION_CTL_ROOT` if you set that. `~/bin` must be on your `PATH`.
 
 ## Commands
 
 ```bash
-browser-ctl tabs
-browser-ctl active
-browser-ctl nav https://example.com
-browser-ctl snapshot
-browser-ctl click e4
-browser-ctl click "Sign in"
-browser-ctl type e2 hello@example.com
-browser-ctl press Enter
-browser-ctl text
-browser-ctl screenshot /tmp/page.png
+browser-session-ctl tabs
+browser-session-ctl active
+browser-session-ctl nav https://example.com
+browser-session-ctl snapshot
+browser-session-ctl click e4
+browser-session-ctl click "Sign in"
+browser-session-ctl type e2 hello@example.com
+browser-session-ctl press Enter
+browser-session-ctl text
+browser-session-ctl screenshot /tmp/page.png
 ```
 
 By default every command uses the **currently active tab** — the selected tab in the Chrome window you last focused. That is looked up again on each command; the sidecar does not remember a tab.
@@ -121,9 +121,9 @@ By default every command uses the **currently active tab** — the selected tab 
 Pass `--tab <id>` only when you want a different tab. It is optional and can go before or after the command:
 
 ```bash
-browser-ctl tabs
-browser-ctl snapshot --tab 123456789
-browser-ctl click e4 --tab 123456789
+browser-session-ctl tabs
+browser-session-ctl snapshot --tab 123456789
+browser-session-ctl click e4 --tab 123456789
 ```
 
 Screenshot of a background `--tab` will briefly focus that tab (Chrome can only capture what is on screen).

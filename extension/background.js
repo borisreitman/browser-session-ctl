@@ -122,7 +122,7 @@ async function tabById(tabId) {
   try {
     return await chrome.tabs.get(tabId);
   } catch {
-    throw new Error(`No Chrome tab with id ${tabId}. Run \`browser-ctl tabs\` to list ids.`);
+    throw new Error(`No Chrome tab with id ${tabId}. Run \`browser-session-ctl tabs\` to list ids.`);
   }
 }
 
@@ -139,7 +139,7 @@ async function sendToPage(tab, payload) {
       `This page cannot be automated (${tab.url}). Switch to a normal http(s) tab.`
     );
   }
-  const message = { source: "browser-automate", ...payload };
+    const message = { source: "browser-session-ctl", ...payload };
   try {
     return await chrome.tabs.sendMessage(tab.id, message);
   } catch {

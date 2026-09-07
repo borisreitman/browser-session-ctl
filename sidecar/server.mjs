@@ -139,5 +139,5 @@ wss.on("connection", (socket, req) => {
 
 server.listen(PORT, DEFAULT_HOST, () => {
   console.log(`Sidecar listening on http://${DEFAULT_HOST}:${PORT}`);
-  console.log("Load the unpacked extension, then run: npm run ctl -- snapshot");
+  console.log("Load the unpacked extension, then run: browser-session-ctl snapshot");
 });

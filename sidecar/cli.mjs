@@ -9,30 +9,30 @@ Default: every command uses the tab that is active right now
 is resolved again on each command. Nothing is remembered.
 
 Usage:
-  browser-ctl <command> ...
-  browser-ctl --tab <id> <command> ...
+  browser-session-ctl <command> ...
+  browser-session-ctl --tab <id> <command> ...
 
-  browser-ctl status
-  browser-ctl tabs
-  browser-ctl active
-  browser-ctl nav <url>
-  browser-ctl back | forward | reload
-  browser-ctl snapshot
-  browser-ctl text
-  browser-ctl click <ref|name>
-  browser-ctl type <ref|name> <text> [--submit]
-  browser-ctl press <key>
-  browser-ctl scroll [up|down]
-  browser-ctl screenshot [path]
+  browser-session-ctl status
+  browser-session-ctl tabs
+  browser-session-ctl active
+  browser-session-ctl nav <url>
+  browser-session-ctl back | forward | reload
+  browser-session-ctl snapshot
+  browser-session-ctl text
+  browser-session-ctl click <ref|name>
+  browser-session-ctl type <ref|name> <text> [--submit]
+  browser-session-ctl press <key>
+  browser-session-ctl scroll [up|down]
+  browser-session-ctl screenshot [path]
 
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
 
 Examples:
-  browser-ctl snapshot
-  browser-ctl click e4
-  browser-ctl tabs
-  browser-ctl snapshot --tab 123456789
+  browser-session-ctl snapshot
+  browser-session-ctl click e4
+  browser-session-ctl tabs
+  browser-session-ctl snapshot --tab 123456789
 `;
 
 function printUsage() {
