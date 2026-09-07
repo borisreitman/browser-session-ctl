@@ -2,7 +2,7 @@
 # Run browser-session-ctl via npm in the project folder, from any cwd.
 set -euo pipefail
 
-DEFAULT_ROOT="/Users/boris/work/experiment/browser-automate"
+DEFAULT_ROOT="/Users/boris/work/browser-session-ctl"
 
 resolve_root() {
   if [[ -n "${BROWSER_SESSION_CTL_ROOT:-}" ]]; then

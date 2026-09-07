@@ -99,7 +99,7 @@ browser-session-ctl status
 browser-session-ctl snapshot
 ```
 
-The script looks for this project at `/Users/boris/work/experiment/browser-automate`, or at `$BROWSER_SESSION_CTL_ROOT` if you set that. `~/bin` must be on your `PATH`.
+The script looks for this project at `/Users/boris/work/browser-session-ctl`, or at `$BROWSER_SESSION_CTL_ROOT` if you set that. `~/bin` must be on your `PATH`.
 
 ## Commands
 

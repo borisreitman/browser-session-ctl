@@ -139,7 +139,7 @@ async function sendToPage(tab, payload) {
       `This page cannot be automated (${tab.url}). Switch to a normal http(s) tab.`
     );
   }
-    const message = { source: "browser-session-ctl", ...payload };
+  const message = { source: "browser-session-ctl", ...payload };
   try {
     return await chrome.tabs.sendMessage(tab.id, message);
   } catch {
