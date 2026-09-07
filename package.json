@@ -10,7 +10,8 @@
   },
   "scripts": {
     "start": "node sidecar/server.mjs",
-    "ctl": "node sidecar/cli.mjs"
+    "ctl": "node sidecar/cli.mjs",
+    "trace-render": "node scripts/trace-render.js"
   },
   "engines": {
     "node": ">=18"

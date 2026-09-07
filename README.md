@@ -138,6 +138,16 @@ curl -s http://127.0.0.1:8765/command \
   -d '{"method":"page.snapshot"}'
 ```
 
+## Render a trace
+
+A trace is a markdown log of commands, snapshot listings, and viewport screenshots (see [doc/demo-trace.md](doc/demo-trace.md)). Put images in a folder with the same name (`doc/demo-trace/`), then:
+
+```bash
+scripts/trace-render.js doc/demo-trace.md
+```
+
+Or `npm run trace-render` to render every `doc/**/*.md`. Each source writes `<name>.pdf` beside it. Local Chrome is required (`--print-to-pdf`).
+
 ## Limits
 
 - Only `http://` and `https://` tabs. Chrome settings, the Web Store, and the PDF viewer are blocked by Chrome.
