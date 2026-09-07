@@ -20,6 +20,7 @@ Usage:
   browser-session-ctl snapshot
   browser-session-ctl text
   browser-session-ctl click <ref|name>
+  browser-session-ctl options <ref|name>
   browser-session-ctl type <ref|name> <text> [--submit]
   browser-session-ctl press <key>
   browser-session-ctl scroll [up|down]
@@ -142,6 +143,12 @@ async function main(argv) {
       const target = rest.join(" ").trim();
       if (!target) throw new Error("ref or name is required");
       printResult(await command("page.click", withTab(targetParams(target), tabId)));
+      return;
+    }
+    case "options": {
+      const target = rest.join(" ").trim();
+      if (!target) throw new Error("ref or name is required");
+      printResult(await command("page.options", withTab(targetParams(target), tabId)));
       return;
     }
     case "type": {

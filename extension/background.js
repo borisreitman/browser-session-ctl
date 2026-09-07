@@ -126,7 +126,22 @@ async function tabById(tabId) {
   }
 }
 
+const PAGE_SCRIPT_VERSION = 4;
+
+async function pageScriptVersion(tabId) {
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => globalThis.__bscVersion || 0,
+    });
+    return Number(result) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 async function inject(tabId) {
+  if ((await pageScriptVersion(tabId)) >= PAGE_SCRIPT_VERSION) return;
   await chrome.scripting.executeScript({
     target: { tabId },
     files: ["content.js"],
@@ -139,28 +154,146 @@ async function sendToPage(tab, payload) {
       `This page cannot be automated (${tab.url}). Switch to a normal http(s) tab.`
     );
   }
-  const message = { source: "browser-session-ctl", ...payload };
-  try {
-    return await chrome.tabs.sendMessage(tab.id, message);
-  } catch {
-    await inject(tab.id);
-    let lastError;
-    for (let i = 0; i < 8; i += 1) {
-      try {
-        return await chrome.tabs.sendMessage(tab.id, message);
-      } catch (err) {
-        lastError = err;
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+  const message = { source: "browser-session-ctl-v3", ...payload };
+  await inject(tab.id);
+  let lastError;
+  for (let i = 0; i < 8; i += 1) {
+    try {
+      return await chrome.tabs.sendMessage(tab.id, message);
+    } catch (err) {
+      lastError = err;
+      await inject(tab.id);
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    throw lastError || new Error("Could not reach the page script");
   }
+  throw lastError || new Error("Could not reach the page script");
 }
 
 function unwrap(response) {
   if (!response) throw new Error("No response from the page. Reload the tab and try again.");
   if (!response.ok) throw new Error(response.error || "Page action failed");
   return response.result;
+}
+
+function runInPage(tab, args, func) {
+  return chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    args,
+    func,
+  });
+}
+
+async function clickByVisibleText(tab, name) {
+  const [{ result, error }] = await runInPage(tab, [name], (needleRaw) => {
+    const needle = String(needleRaw || "").trim().toLowerCase();
+    if (!needle) throw new Error("name is required");
+    const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
+    const candidates = [];
+
+    const consider = (el) => {
+      const style = getComputedStyle(el);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.opacity === "0"
+      ) {
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) return;
+      const text = clean(el.innerText || el.textContent);
+      if (!text || text.length > 120) return;
+      const lower = text.toLowerCase();
+      const exact = lower === needle;
+      const partial = lower.includes(needle);
+      if (!exact && !partial) return;
+      candidates.push({ el, text, exact, len: text.length });
+    };
+
+    const walk = (root) => {
+      root.querySelectorAll("*").forEach((node) => {
+        consider(node);
+        if (node.shadowRoot) walk(node.shadowRoot);
+      });
+    };
+    walk(document);
+
+    candidates.sort((a, b) => Number(b.exact) - Number(a.exact) || a.len - b.len);
+    const best = candidates[0];
+    if (!best) throw new Error(`No visible control named "${needleRaw}"`);
+
+    const el = best.el;
+    el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    if (el instanceof HTMLElement) el.focus({ preventScroll: true });
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new MouseEvent("pointerdown", opts));
+    el.dispatchEvent(new MouseEvent("mousedown", opts));
+    el.dispatchEvent(new MouseEvent("pointerup", opts));
+    el.dispatchEvent(new MouseEvent("mouseup", opts));
+    if (typeof el.click === "function") el.click();
+    else el.dispatchEvent(new MouseEvent("click", opts));
+    return { name: best.text, tag: el.tagName };
+  });
+  if (error) throw new Error(error.message || String(error));
+  return result;
+}
+
+async function typeByVisibleName(tab, name, text, submit) {
+  const [{ result, error }] = await runInPage(tab, [name, text, Boolean(submit)], (needleRaw, value, doSubmit) => {
+    const needle = String(needleRaw || "").trim().toLowerCase();
+    const clean = (s) => String(s || "").replace(/\s+/g, " ").trim();
+    let host = null;
+    let bestLen = Infinity;
+    document.querySelectorAll("*").forEach((el) => {
+      const label = clean(
+        el.getAttribute("aria-label") ||
+          el.innerText ||
+          el.getAttribute("placeholder") ||
+          ""
+      ).toLowerCase();
+      if (!label) return;
+      if (label === needle || label.includes(needle)) {
+        if (label.length < bestLen) {
+          host = el;
+          bestLen = label.length;
+        }
+      }
+    });
+    if (!host) throw new Error(`No visible control named "${needleRaw}"`);
+    const el =
+      host instanceof HTMLInputElement ||
+      host instanceof HTMLTextAreaElement ||
+      host instanceof HTMLSelectElement
+        ? host
+        : host.querySelector("input:not([type=hidden]), textarea, [contenteditable='true']") ||
+          host;
+    if (!(el instanceof HTMLElement)) throw new Error("Not a field you can type into");
+    el.focus({ preventScroll: true });
+    if (el instanceof HTMLSelectElement) {
+      const match = [...el.options].find(
+        (opt) =>
+          opt.value === value || clean(opt.text).toLowerCase() === String(value).trim().toLowerCase()
+      );
+      el.value = match ? match.value : value;
+    } else if (el.isContentEditable) {
+      el.textContent = value;
+    } else if ("value" in el) {
+      const proto = el instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, "value");
+      if (desc?.set) desc.set.call(el, value);
+      else el.value = value;
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    if (doSubmit) {
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+    }
+    return { name: needleRaw, value };
+  });
+  if (error) throw new Error(error.message || String(error));
+  return result;
 }
 
 function waitForComplete(tabId, timeoutMs = 20000) {
@@ -246,7 +379,7 @@ async function handleCommand(message) {
       return unwrap(await sendToPage(tab, { action: "text" }));
     }
 
-    case "page.click": {
+    case "page.options": {
       const tab = await tabById(params.tabId);
       let ref = params.ref;
       if (!ref && params.name) {
@@ -254,25 +387,56 @@ async function handleCommand(message) {
         ref = found.ref;
       }
       if (!ref) throw new Error("ref or name is required");
-      return unwrap(await sendToPage(tab, { action: "click", ref }));
+      return unwrap(await sendToPage(tab, { action: "options", ref }));
+    }
+
+    case "page.click": {
+      const tab = await tabById(params.tabId);
+      let ref = params.ref;
+      if (!ref && params.name) {
+        try {
+          const found = unwrap(await sendToPage(tab, { action: "find", name: params.name }));
+          ref = found.ref;
+        } catch {
+          return clickByVisibleText(tab, params.name);
+        }
+      }
+      if (!ref) throw new Error("ref or name is required");
+      try {
+        return unwrap(await sendToPage(tab, { action: "click", ref }));
+      } catch (err) {
+        if (params.name) return clickByVisibleText(tab, params.name);
+        throw err;
+      }
     }
 
     case "page.type": {
       const tab = await tabById(params.tabId);
       let ref = params.ref;
       if (!ref && params.name) {
-        const found = unwrap(await sendToPage(tab, { action: "find", name: params.name }));
-        ref = found.ref;
+        try {
+          const found = unwrap(await sendToPage(tab, { action: "find", name: params.name }));
+          ref = found.ref;
+        } catch {
+          return typeByVisibleName(tab, params.name, params.text ?? "", Boolean(params.submit));
+        }
       }
       if (!ref) throw new Error("ref or name is required");
-      return unwrap(
-        await sendToPage(tab, {
-          action: "type",
-          ref,
-          text: params.text ?? "",
-          submit: Boolean(params.submit),
-        })
-      );
+      try {
+        return unwrap(
+          await sendToPage(tab, {
+            action: "type",
+            ref,
+            text: params.text ?? "",
+            submit: Boolean(params.submit),
+          })
+        );
+      } catch (err) {
+        if (params.name) {
+          return typeByVisibleName(tab, params.name, params.text ?? "", Boolean(params.submit));
+        }
+        throw err;
+      }
     }
 
     case "page.press": {

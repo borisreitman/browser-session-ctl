@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "browser-session-ctl",
-  "version": "0.1.2",
+  "version": "0.1.5",
   "description": "Lets a local agent drive this Chrome session on any website.",
   "permissions": [
     "tabs",
