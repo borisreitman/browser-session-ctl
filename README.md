@@ -85,10 +85,10 @@ The toolbar badge shows **on** or **off**.
 
 ## Global command
 
-`bin/browser-session-ctl` runs `npm run ctl` in this repo, from any working directory. Copy it to `~/bin`:
+`doc/browser-session-ctl` is an example wrapper that runs `npm run ctl` in this repo, from any working directory. Copy it to `~/bin`, then edit `DEFAULT_ROOT` to your clone (or set `$BROWSER_SESSION_CTL_ROOT`):
 
 ```bash
-cp bin/browser-session-ctl ~/bin/browser-session-ctl
+cp doc/browser-session-ctl ~/bin/browser-session-ctl
 chmod +x ~/bin/browser-session-ctl
 ```
 
@@ -99,7 +99,7 @@ browser-session-ctl status
 browser-session-ctl snapshot
 ```
 
-The script looks for this project at `/Users/boris/work/browser-session-ctl`, or at `$BROWSER_SESSION_CTL_ROOT` if you set that. `~/bin` must be on your `PATH`.
+`~/bin` must be on your `PATH`.
 
 ## Commands
 

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Run browser-session-ctl via npm in the project folder, from any cwd.
+# Example wrapper. Copy to ~/bin and edit DEFAULT_ROOT to your clone:
+#   cp doc/browser-session-ctl ~/bin/browser-session-ctl
+#   chmod +x ~/bin/browser-session-ctl
 set -euo pipefail
 
-DEFAULT_ROOT="/Users/boris/work/browser-session-ctl"
+DEFAULT_ROOT="$HOME/src/browser-session-ctl"
 
 resolve_root() {
   if [[ -n "${BROWSER_SESSION_CTL_ROOT:-}" ]]; then
