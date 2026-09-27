@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 5;
+  const VERSION = 6;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
@@ -25,15 +25,15 @@
       bar.id = ANNOTATE_BAR_ID;
       bar.style.cssText = [
         "position: fixed",
-        "top: 0",
-        "left: 0",
-        "right: 0",
+        "bottom: 8px",
+        "right: 8px",
         "z-index: 2147483647",
         "background: #111827",
         "color: #fff",
         "font: 12px/1.6 -apple-system, BlinkMacSystemFont, sans-serif",
-        "text-align: center",
+        "text-align: right",
         "padding: 2px 8px",
+        "border-radius: 4px",
         "pointer-events: none",
       ].join("; ");
       (document.body || document.documentElement).appendChild(bar);

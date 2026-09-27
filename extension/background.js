@@ -150,7 +150,7 @@ async function getTabOrThrow(tabId) {
   }
 }
 
-const PAGE_SCRIPT_VERSION = 5;
+const PAGE_SCRIPT_VERSION = 6;
 
 async function pageScriptVersion(tabId) {
   try {
