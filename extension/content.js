@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 10;
+  const VERSION = 13;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
@@ -7,18 +7,23 @@
   const ANNOTATE_BAR_ID = "__browser-session-ctl-annotate-bar__";
   // How long the bar stays yellow after the last command before fading to
   // black. Tune this if it feels too eager or too sluggish.
-  const ANNOTATE_ACTIVE_MS = 60000;
+  const ANNOTATE_ACTIVE_MS = 120000;
   const ANNOTATE_ACTIVE_BG = "#facc15";
   const ANNOTATE_ACTIVE_FG = "#111827";
+  const ANNOTATE_ACTIVE_BORDER = "#f97316";
   const ANNOTATE_IDLE_BG = "#111827";
   const ANNOTATE_IDLE_FG = "#ffffff";
+  const ANNOTATE_IDLE_BORDER = "transparent";
   let lastControlledAt = null;
   let annotateIdleTimer = null;
 
   // The extension's own icon, shown briefly as the tab's favicon.
   const FAVICON_FLASH_URI = chrome.runtime.getURL("icons/favicon-flash.svg");
-  // How long the flashed favicon stays up before reverting to the page's own.
-  const FAVICON_FLASH_MS = 800;
+  // How long the flashed favicon stays up before reverting to the page's
+  // own. Each new command clears and resets this timer (see flashFavicon),
+  // so back-to-back activity keeps it up rather than letting it flicker
+  // off between commands.
+  const FAVICON_FLASH_MS = 30000;
   let faviconState = null; // { links: [{el, href}], created } | null
   let faviconTimer = null;
 
@@ -92,6 +97,7 @@
     if (!bar) return;
     bar.style.background = active ? ANNOTATE_ACTIVE_BG : ANNOTATE_IDLE_BG;
     bar.style.color = active ? ANNOTATE_ACTIVE_FG : ANNOTATE_IDLE_FG;
+    bar.style.borderColor = active ? ANNOTATE_ACTIVE_BORDER : ANNOTATE_IDLE_BORDER;
   }
 
   // A one-shot ring pulse so each individual command is visible, even if
@@ -119,6 +125,23 @@
     annotateIdleTimer = setTimeout(() => setAnnotateColors(false), ANNOTATE_ACTIVE_MS);
   }
 
+  // Forces the bar straight into "active" (yellow + pulse) or "idle"
+  // (black) without waiting for a real command or the idle timeout — for
+  // `debug-annotate-highlight` to confirm both states actually
+  // render and transition correctly on a given tab.
+  function debugAnnotateStatusHighlight(state) {
+    if (!document.getElementById(ANNOTATE_BAR_ID)) {
+      throw new Error("annotate is not on for this tab — run `annotate on` first");
+    }
+    if (state === "idle") {
+      clearTimeout(annotateIdleTimer);
+      setAnnotateColors(false);
+      return { state: "idle" };
+    }
+    markAnnotateActive();
+    return { state: "active" };
+  }
+
   function setAnnotate(enabled) {
     let bar = document.getElementById(ANNOTATE_BAR_ID);
     if (!enabled) {
@@ -135,12 +158,14 @@
         "bottom: 8px",
         "right: 8px",
         "z-index: 2147483647",
+        "box-sizing: border-box",
         "font: 12px/1.6 -apple-system, BlinkMacSystemFont, sans-serif",
         "text-align: right",
         "padding: 2px 8px",
         "border-radius: 4px",
+        "border: 2px solid transparent",
         "pointer-events: none",
-        "transition: background 0.2s ease, color 0.2s ease",
+        "transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease",
       ].join("; ");
       (document.body || document.documentElement).appendChild(bar);
     }
@@ -651,6 +676,9 @@
         break;
       case "debug-set-favicon":
         reply(() => debugSetFavicon(message.enabled !== false));
+        break;
+      case "debug-annotate-highlight":
+        reply(() => debugAnnotateStatusHighlight(message.state === "idle" ? "idle" : "active"));
         break;
       default:
         reply(() => {
