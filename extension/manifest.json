@@ -31,7 +31,7 @@
   "web_accessible_resources": [
     {
       "resources": ["icons/favicon-flash.svg"],
-      "matches": ["http://*/*", "https://*/*"]
+      "matches": ["http://*/*", "https://*/*", "file:///*"]
     }
   ]
 }
