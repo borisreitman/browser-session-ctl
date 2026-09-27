@@ -151,21 +151,6 @@ browser-session-ctl annotate on
 browser-session-ctl annotate off
 ```
 
-`debug-set-favicon on` swaps the tab's favicon to that same extension icon and leaves it there (no auto-revert, and it ignores whether `annotate` is on) — a quick way to confirm the swap mechanism itself actually works on a given tab. `debug-set-favicon off` restores it.
-
-```bash
-browser-session-ctl debug-set-favicon on
-browser-session-ctl debug-set-favicon off
-```
-
-`debug-annotate-highlight` forces the bar straight into one of its three states — `action` (yellow + red border + pulse), `active` (plain yellow), or `idle` (black) — instantly, without waiting on a real command or either timeout. Requires `annotate on` already be running on that tab.
-
-```bash
-browser-session-ctl debug-annotate-highlight action
-browser-session-ctl debug-annotate-highlight active
-browser-session-ctl debug-annotate-highlight idle
-```
-
 `config annotate-new-tabs [on|off]` is a persistent global setting (stored in the extension, survives restarts) controlling whether `open <url>` automatically turns `annotate` on for the page it opens. **Default: on.** Run it with no value to read the current setting. Run `config` with no setting name at all to print every global setting at once.
 
 ```bash
@@ -180,6 +165,25 @@ JSON works too:
 curl -s http://127.0.0.1:8765/command \
   -H 'content-type: application/json' \
   -d '{"method":"page.snapshot"}'
+```
+
+## Debug commands
+
+Only useful for troubleshooting the `annotate` mechanism itself — not needed for normal use.
+
+`debug-set-favicon on` swaps the tab's favicon to that same extension icon and leaves it there (no auto-revert, and it ignores whether `annotate` is on) — a quick way to confirm the swap mechanism itself actually works on a given tab. `debug-set-favicon off` restores it.
+
+```bash
+browser-session-ctl debug-set-favicon on
+browser-session-ctl debug-set-favicon off
+```
+
+`debug-annotate-highlight` forces the bar straight into one of its three states — `action` (yellow + red border + pulse), `active` (plain yellow), or `idle` (black) — instantly, without waiting on a real command or either timeout. Requires `annotate on` already be running on that tab.
+
+```bash
+browser-session-ctl debug-annotate-highlight action
+browser-session-ctl debug-annotate-highlight active
+browser-session-ctl debug-annotate-highlight idle
 ```
 
 ## Tests
