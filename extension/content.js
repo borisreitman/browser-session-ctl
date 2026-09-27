@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 8;
+  const VERSION = 9;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
@@ -15,6 +15,55 @@
   let lastControlledAt = null;
   let annotateIdleTimer = null;
 
+  // The extension's own icon, shown briefly as the tab's favicon.
+  const FAVICON_FLASH_URI = chrome.runtime.getURL("icons/favicon-flash.svg");
+  // How long the flashed favicon stays up before reverting to the page's own.
+  const FAVICON_FLASH_MS = 800;
+  let faviconState = null; // { links: [{el, href}], created } | null
+  let faviconTimer = null;
+
+  function restoreFavicon() {
+    clearTimeout(faviconTimer);
+    faviconTimer = null;
+    if (!faviconState) return;
+    if (faviconState.created) {
+      faviconState.created.remove();
+    } else {
+      for (const { el, href } of faviconState.links) {
+        if (href === null) el.removeAttribute("href");
+        else el.setAttribute("href", href);
+      }
+    }
+    faviconState = null;
+  }
+
+  // Blinks the tab's favicon to the extension's own icon for a moment, so
+  // it is visible that something just controlled this tab. Only while
+  // annotate is on — the bar's presence is the on/off flag for this too.
+  function flashFavicon() {
+    if (!document.getElementById(ANNOTATE_BAR_ID)) return;
+
+    clearTimeout(faviconTimer);
+    if (!faviconState) {
+      const links = [...document.querySelectorAll('link[rel~="icon"]')];
+      if (links.length === 0) {
+        const link = document.createElement("link");
+        link.rel = "icon";
+        document.head.appendChild(link);
+        faviconState = { links: [], created: link };
+      } else {
+        faviconState = {
+          links: links.map((el) => ({ el, href: el.getAttribute("href") })),
+          created: null,
+        };
+      }
+    }
+    const targets = faviconState.created ? [faviconState.created] : faviconState.links.map((l) => l.el);
+    for (const el of targets) el.setAttribute("href", FAVICON_FLASH_URI);
+
+    faviconTimer = setTimeout(restoreFavicon, FAVICON_FLASH_MS);
+  }
+
   function renderAnnotateBar() {
     const bar = document.getElementById(ANNOTATE_BAR_ID);
     if (!bar) return;
@@ -29,12 +78,28 @@
     bar.style.color = active ? ANNOTATE_ACTIVE_FG : ANNOTATE_IDLE_FG;
   }
 
+  // A one-shot ring pulse so each individual command is visible, even if
+  // the bar was already yellow from a previous one moments ago.
+  function pulseAnnotateBar() {
+    const bar = document.getElementById(ANNOTATE_BAR_ID);
+    if (!bar || typeof bar.animate !== "function") return;
+    bar.animate(
+      [
+        { boxShadow: "0 0 0 0 rgba(250, 204, 21, 0.9)" },
+        { boxShadow: "0 0 0 6px rgba(250, 204, 21, 0)" },
+        { boxShadow: "0 0 0 0 rgba(250, 204, 21, 0)" },
+      ],
+      { duration: 450, easing: "ease-out" }
+    );
+  }
+
   // Yellow while a command is actively touching this tab, back to black
   // once it has been quiet for a bit.
   function markAnnotateActive() {
     clearTimeout(annotateIdleTimer);
     if (!document.getElementById(ANNOTATE_BAR_ID)) return;
     setAnnotateColors(true);
+    pulseAnnotateBar();
     annotateIdleTimer = setTimeout(() => setAnnotateColors(false), ANNOTATE_ACTIVE_MS);
   }
 
@@ -42,6 +107,7 @@
     let bar = document.getElementById(ANNOTATE_BAR_ID);
     if (!enabled) {
       clearTimeout(annotateIdleTimer);
+      restoreFavicon();
       bar?.remove();
       return { enabled: false };
     }
@@ -526,6 +592,7 @@
     lastControlledAt = Date.now();
     renderAnnotateBar();
     markAnnotateActive();
+    flashFavicon();
     const reply = (work) => {
       Promise.resolve()
         .then(work)

@@ -150,7 +150,7 @@ async function getTabOrThrow(tabId) {
   }
 }
 
-const PAGE_SCRIPT_VERSION = 8;
+const PAGE_SCRIPT_VERSION = 9;
 
 async function pageScriptVersion(tabId) {
   try {
@@ -350,6 +350,7 @@ async function handleCommand(message) {
         url: tab.url,
         active: tab.active,
         restricted: isRestricted(tab.url),
+        favIconUrl: tab.favIconUrl,
       }));
     }
 
