@@ -150,7 +150,7 @@ async function getTabOrThrow(tabId) {
   }
 }
 
-const PAGE_SCRIPT_VERSION = 4;
+const PAGE_SCRIPT_VERSION = 5;
 
 async function pageScriptVersion(tabId) {
   try {
@@ -489,6 +489,13 @@ async function handleCommand(message) {
         }
         throw err;
       }
+    }
+
+    case "page.annotate": {
+      const tab = await tabById(params.tabId);
+      return unwrap(
+        await sendToPage(tab, { action: "annotate", enabled: params.enabled !== false })
+      );
     }
 
     case "page.press": {

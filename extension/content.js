@@ -1,9 +1,46 @@
 (() => {
-  const VERSION = 4;
+  const VERSION = 5;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
   const refs = new Map();
+  const ANNOTATE_BAR_ID = "__browser-session-ctl-annotate-bar__";
+  let lastControlledAt = null;
+
+  function renderAnnotateBar() {
+    const bar = document.getElementById(ANNOTATE_BAR_ID);
+    if (!bar) return;
+    const when = lastControlledAt ? new Date(lastControlledAt).toLocaleTimeString() : "never";
+    bar.textContent = `browser-session-ctl — last controlled ${when}`;
+  }
+
+  function setAnnotate(enabled) {
+    const existing = document.getElementById(ANNOTATE_BAR_ID);
+    if (!enabled) {
+      existing?.remove();
+      return { enabled: false };
+    }
+    if (!existing) {
+      const bar = document.createElement("div");
+      bar.id = ANNOTATE_BAR_ID;
+      bar.style.cssText = [
+        "position: fixed",
+        "top: 0",
+        "left: 0",
+        "right: 0",
+        "z-index: 2147483647",
+        "background: #111827",
+        "color: #fff",
+        "font: 12px/1.6 -apple-system, BlinkMacSystemFont, sans-serif",
+        "text-align: center",
+        "padding: 2px 8px",
+        "pointer-events: none",
+      ].join("; ");
+      (document.body || document.documentElement).appendChild(bar);
+    }
+    renderAnnotateBar();
+    return { enabled: true };
+  }
 
   const INTERACTIVE =
     'a[href], button, input, textarea, select, summary, label, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="tab"], [role="switch"], [role="combobox"], [role="listbox"], [role="option"], [role="menu"] [role="menuitem"], [contenteditable="true"], [contenteditable=""]';
@@ -461,6 +498,8 @@
 
   function onMessage(message, _sender, sendResponse) {
     if (!message || message.source !== "browser-session-ctl-v3") return;
+    lastControlledAt = Date.now();
+    renderAnnotateBar();
     const reply = (work) => {
       Promise.resolve()
         .then(work)
@@ -497,6 +536,9 @@
         break;
       case "options":
         reply(() => listOptions(message.ref));
+        break;
+      case "annotate":
+        reply(() => setAnnotate(message.enabled !== false));
         break;
       default:
         reply(() => {

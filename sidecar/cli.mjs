@@ -27,6 +27,7 @@ Usage:
   browser-session-ctl press <key>
   browser-session-ctl scroll [up|down]
   browser-session-ctl screenshot [path]
+  browser-session-ctl annotate [on|off]
 
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
@@ -39,6 +40,8 @@ Examples:
   browser-session-ctl open https://example.com
   browser-session-ctl open https://example.com --background
   browser-session-ctl close --tab 123456789
+  browser-session-ctl annotate on
+  browser-session-ctl annotate off
 `;
 
 function printUsage() {
@@ -205,6 +208,12 @@ async function main(argv) {
       const base64 = String(result.dataUrl || "").replace(/^data:image\/png;base64,/, "");
       await writeFile(path, Buffer.from(base64, "base64"));
       printResult({ path, url: result.url, title: result.title });
+      return;
+    }
+    case "annotate": {
+      const arg = (rest[0] || "on").toLowerCase();
+      if (arg !== "on" && arg !== "off") throw new Error("annotate expects on or off");
+      printResult(await command("page.annotate", withTab({ enabled: arg === "on" }, tabId)));
       return;
     }
     default:
