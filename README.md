@@ -118,7 +118,7 @@ browser-session-ctl text
 browser-session-ctl screenshot /tmp/page.png
 ```
 
-`open [url]` creates a new tab and prints its `id` right away, so you can target it with `--tab <id>` on the very next command without first running `tabs` to look it up. Add `--background` to open it without switching focus.
+`open [url]` creates a new tab and prints its `id` right away, so you can target it with `--tab <id>` on the very next command without first running `tabs` to look it up. Add `--background` to open it without switching focus. If the currently active tab is blank (`about:blank` or a fresh new-tab page), it reuses that tab instead of opening another one.
 
 ```bash
 browser-session-ctl open https://example.com

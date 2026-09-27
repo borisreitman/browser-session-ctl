@@ -12,6 +12,10 @@ function isRestricted(url) {
   return !url || restricted.some((re) => re.test(url));
 }
 
+function isBlankTab(url) {
+  return !url || /^about:blank$/i.test(url) || /^chrome:\/\/newtab\/?$/i.test(url);
+}
+
 async function getPort() {
   const { port } = await chrome.storage.local.get({ port: DEFAULT_PORT });
   return Number(port) || DEFAULT_PORT;
@@ -360,10 +364,19 @@ async function handleCommand(message) {
     }
 
     case "tabs.open": {
-      const tab = await chrome.tabs.create({
-        url: params.url || undefined,
-        active: params.active !== false,
-      });
+      const active = params.active !== false;
+      const [current] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      const reusable = current && isBlankTab(current.url);
+
+      let tab;
+      if (reusable && params.url) {
+        tab = await chrome.tabs.update(current.id, { url: params.url, active });
+      } else if (reusable) {
+        tab = current;
+      } else {
+        tab = await chrome.tabs.create({ url: params.url || undefined, active });
+      }
+
       if (!params.url) {
         return { id: tab.id, windowId: tab.windowId, title: tab.title, url: tab.url };
       }
@@ -371,8 +384,8 @@ async function handleCommand(message) {
         const done = await waitForComplete(tab.id);
         return { id: done.id, windowId: done.windowId, title: done.title, url: done.url };
       } catch {
-        const current = await chrome.tabs.get(tab.id);
-        return { id: current.id, windowId: current.windowId, title: current.title, url: current.url };
+        const finalTab = await chrome.tabs.get(tab.id);
+        return { id: finalTab.id, windowId: finalTab.windowId, title: finalTab.title, url: finalTab.url };
       }
     }
 
