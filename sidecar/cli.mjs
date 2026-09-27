@@ -30,6 +30,7 @@ Usage:
   browser-session-ctl annotate [on|off]
   browser-session-ctl debug-set-favicon [on|off]
   browser-session-ctl debug-annotate-highlight [action|active|idle]
+  browser-session-ctl config
   browser-session-ctl config annotate-new-tabs [on|off]
 
 --tab <id>  Override the default and use this tab instead.
@@ -247,7 +248,16 @@ async function main(argv) {
     case "config": {
       const SETTINGS = { "annotate-new-tabs": "annotateNewTabs" };
       const name = rest[0];
-      const key = name && SETTINGS[name];
+      if (!name) {
+        const settings = await command("settings.get");
+        const result = {};
+        for (const [settingName, key] of Object.entries(SETTINGS)) {
+          result[settingName] = settings[key] ? "on" : "off";
+        }
+        printResult(result);
+        return;
+      }
+      const key = SETTINGS[name];
       if (!key) {
         throw new Error(`config expects a known setting name, e.g. ${Object.keys(SETTINGS).join(", ")}`);
       }
