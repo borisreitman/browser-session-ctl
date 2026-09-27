@@ -216,7 +216,7 @@ Or `npm run trace-render` to render every `doc/**/*.md`. Each source writes `<na
 
 ## Limits
 
-- Only `http://` and `https://` tabs. Chrome settings, the Web Store, and the PDF viewer are blocked by Chrome.
+- `http://`, `https://`, and `file://` tabs (the last needs **Allow access to file URLs** enabled for the extension, see Tests below). Chrome settings, `chrome://`/`edge://` pages, extension pages, the Web Store, and the PDF viewer are blocked by Chrome.
 - Extension clicks are not OS-level “trusted” input. Most sites work; a few bot-sensitive flows may ignore them.
 - Password field values are redacted in snapshots.
 - The sidecar binds to localhost only. Do not expose port 8765.
