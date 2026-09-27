@@ -150,7 +150,7 @@ async function getTabOrThrow(tabId) {
   }
 }
 
-const PAGE_SCRIPT_VERSION = 13;
+const PAGE_SCRIPT_VERSION = 14;
 
 async function pageScriptVersion(tabId) {
   try {
@@ -508,12 +508,8 @@ async function handleCommand(message) {
 
     case "page.debugAnnotateHighlight": {
       const tab = await tabById(params.tabId);
-      return unwrap(
-        await sendToPage(tab, {
-          action: "debug-annotate-highlight",
-          state: params.state === "idle" ? "idle" : "active",
-        })
-      );
+      const state = ["action", "active", "idle"].includes(params.state) ? params.state : "active";
+      return unwrap(await sendToPage(tab, { action: "debug-annotate-highlight", state }));
     }
 
     case "page.press": {

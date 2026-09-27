@@ -29,7 +29,7 @@ Usage:
   browser-session-ctl screenshot [path]
   browser-session-ctl annotate [on|off]
   browser-session-ctl debug-set-favicon [on|off]
-  browser-session-ctl debug-annotate-highlight [active|idle]
+  browser-session-ctl debug-annotate-highlight [action|active|idle]
 
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
@@ -46,6 +46,7 @@ Examples:
   browser-session-ctl annotate off
   browser-session-ctl debug-set-favicon on
   browser-session-ctl debug-set-favicon off
+  browser-session-ctl debug-annotate-highlight action
   browser-session-ctl debug-annotate-highlight active
   browser-session-ctl debug-annotate-highlight idle
 `;
@@ -232,8 +233,8 @@ async function main(argv) {
     }
     case "debug-annotate-highlight": {
       const arg = (rest[0] || "active").toLowerCase();
-      if (arg !== "active" && arg !== "idle") {
-        throw new Error("debug-annotate-highlight expects active or idle");
+      if (!["action", "active", "idle"].includes(arg)) {
+        throw new Error("debug-annotate-highlight expects action, active, or idle");
       }
       printResult(
         await command("page.debugAnnotateHighlight", withTab({ state: arg }, tabId))

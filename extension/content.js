@@ -1,29 +1,31 @@
 (() => {
-  const VERSION = 13;
+  const VERSION = 14;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
   const refs = new Map();
   const ANNOTATE_BAR_ID = "__browser-session-ctl-annotate-bar__";
+  // Shared by the bar's red border and the flashed favicon: how long each
+  // stays up after a command before reverting (plain yellow / the page's
+  // own favicon). Each new command resets both timers, so back-to-back
+  // activity keeps them up rather than letting them flicker between commands.
+  const FLASH_MS = 5000;
+  // Three states, not two:
+  //  - "action": a command just fired within the last FLASH_MS — yellow + red border.
+  //  - "active": under control, but not that recently — plain yellow.
+  //  - "idle":   hasn't been touched in a while — black.
   // How long the bar stays yellow after the last command before fading to
   // black. Tune this if it feels too eager or too sluggish.
   const ANNOTATE_ACTIVE_MS = 120000;
-  const ANNOTATE_ACTIVE_BG = "#facc15";
-  const ANNOTATE_ACTIVE_FG = "#111827";
-  const ANNOTATE_ACTIVE_BORDER = "#f97316";
-  const ANNOTATE_IDLE_BG = "#111827";
-  const ANNOTATE_IDLE_FG = "#ffffff";
-  const ANNOTATE_IDLE_BORDER = "transparent";
+  const ANNOTATE_BG = { action: "#facc15", active: "#facc15", idle: "#111827" };
+  const ANNOTATE_FG = { action: "#111827", active: "#111827", idle: "#ffffff" };
+  const ANNOTATE_BORDER = { action: "#dc2626", active: "transparent", idle: "transparent" };
   let lastControlledAt = null;
   let annotateIdleTimer = null;
+  let annotateBorderTimer = null;
 
   // The extension's own icon, shown briefly as the tab's favicon.
   const FAVICON_FLASH_URI = chrome.runtime.getURL("icons/favicon-flash.svg");
-  // How long the flashed favicon stays up before reverting to the page's
-  // own. Each new command clears and resets this timer (see flashFavicon),
-  // so back-to-back activity keeps it up rather than letting it flicker
-  // off between commands.
-  const FAVICON_FLASH_MS = 30000;
   let faviconState = null; // { links: [{el, href}], created } | null
   let faviconTimer = null;
 
@@ -68,7 +70,7 @@
     if (!document.getElementById(ANNOTATE_BAR_ID)) return;
     clearTimeout(faviconTimer);
     applyFaviconFlash();
-    faviconTimer = setTimeout(restoreFavicon, FAVICON_FLASH_MS);
+    faviconTimer = setTimeout(restoreFavicon, FLASH_MS);
   }
 
   // Unlike flashFavicon, ignores the annotate on/off state and doesn't
@@ -92,12 +94,12 @@
     bar.textContent = `browser-session-ctl — last controlled ${when}`;
   }
 
-  function setAnnotateColors(active) {
+  function setAnnotateState(state) {
     const bar = document.getElementById(ANNOTATE_BAR_ID);
     if (!bar) return;
-    bar.style.background = active ? ANNOTATE_ACTIVE_BG : ANNOTATE_IDLE_BG;
-    bar.style.color = active ? ANNOTATE_ACTIVE_FG : ANNOTATE_IDLE_FG;
-    bar.style.borderColor = active ? ANNOTATE_ACTIVE_BORDER : ANNOTATE_IDLE_BORDER;
+    bar.style.background = ANNOTATE_BG[state];
+    bar.style.color = ANNOTATE_FG[state];
+    bar.style.borderColor = ANNOTATE_BORDER[state];
   }
 
   // A one-shot ring pulse so each individual command is visible, even if
@@ -107,38 +109,46 @@
     if (!bar || typeof bar.animate !== "function") return;
     bar.animate(
       [
-        { boxShadow: "0 0 0 0 rgba(250, 204, 21, 0.9)" },
-        { boxShadow: "0 0 0 6px rgba(250, 204, 21, 0)" },
-        { boxShadow: "0 0 0 0 rgba(250, 204, 21, 0)" },
+        { boxShadow: "0 0 0 0 rgba(220, 38, 38, 0.9)" },
+        { boxShadow: "0 0 0 6px rgba(220, 38, 38, 0)" },
+        { boxShadow: "0 0 0 0 rgba(220, 38, 38, 0)" },
       ],
       { duration: 450, easing: "ease-out" }
     );
   }
 
-  // Yellow while a command is actively touching this tab, back to black
-  // once it has been quiet for a bit.
+  // "action" (yellow + red border) right when a command fires, settling to
+  // plain "active" (yellow) shortly after, then to "idle" (black) once
+  // it's been quiet for a while.
   function markAnnotateActive() {
+    clearTimeout(annotateBorderTimer);
     clearTimeout(annotateIdleTimer);
     if (!document.getElementById(ANNOTATE_BAR_ID)) return;
-    setAnnotateColors(true);
+    setAnnotateState("action");
     pulseAnnotateBar();
-    annotateIdleTimer = setTimeout(() => setAnnotateColors(false), ANNOTATE_ACTIVE_MS);
+    annotateBorderTimer = setTimeout(() => setAnnotateState("active"), FLASH_MS);
+    annotateIdleTimer = setTimeout(() => setAnnotateState("idle"), ANNOTATE_ACTIVE_MS);
   }
 
-  // Forces the bar straight into "active" (yellow + pulse) or "idle"
-  // (black) without waiting for a real command or the idle timeout — for
-  // `debug-annotate-highlight` to confirm both states actually
-  // render and transition correctly on a given tab.
+  // Forces the bar straight into one of its three states without waiting
+  // for a real command or either timeout — for `debug-annotate-highlight`
+  // to confirm each one actually renders correctly on a given tab.
   function debugAnnotateStatusHighlight(state) {
     if (!document.getElementById(ANNOTATE_BAR_ID)) {
       throw new Error("annotate is not on for this tab — run `annotate on` first");
     }
+    clearTimeout(annotateBorderTimer);
+    clearTimeout(annotateIdleTimer);
+    if (state === "action") {
+      setAnnotateState("action");
+      pulseAnnotateBar();
+      return { state: "action" };
+    }
     if (state === "idle") {
-      clearTimeout(annotateIdleTimer);
-      setAnnotateColors(false);
+      setAnnotateState("idle");
       return { state: "idle" };
     }
-    markAnnotateActive();
+    setAnnotateState("active");
     return { state: "active" };
   }
 
@@ -678,7 +688,11 @@
         reply(() => debugSetFavicon(message.enabled !== false));
         break;
       case "debug-annotate-highlight":
-        reply(() => debugAnnotateStatusHighlight(message.state === "idle" ? "idle" : "active"));
+        reply(() =>
+          debugAnnotateStatusHighlight(
+            ["action", "active", "idle"].includes(message.state) ? message.state : "active"
+          )
+        );
         break;
       default:
         reply(() => {

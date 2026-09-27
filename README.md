@@ -142,7 +142,7 @@ Screenshot of a background `--tab` will briefly focus that tab (Chrome can only 
 
 `options` reads every choice on a dropdown from the DOM (`<select>` options, listbox items, custom menus). If the menu is closed and empty, it opens the control and slurps again.
 
-`annotate on` overlays a small status pill in the bottom-right corner of the page showing the last time this tab was controlled, and updates it on every subsequent command. It turns yellow with a bright orange border (dark text) while a command is actively touching the tab, pulses on each individual command, and fades to black with no border (white text) after 2 minutes of inactivity. While it's on, every command also flashes the tab's favicon to the extension's own icon (a dark lightning bolt on a bright yellow circle) for 30 seconds, so you can spot activity in the tab strip without looking at the page — like the bar, each new command resets that timer, so back-to-back activity keeps it up rather than letting it flicker. `annotate off` removes both. It only works on a normal `http(s)` page already showing content — like the rest of the commands, it refuses a blank or restricted tab (`about:blank`, a fresh new-tab page, `chrome://…`). Both live in the page itself, so navigating or reloading clears them; run `annotate on` again afterward if you want them back.
+`annotate on` overlays a small status pill in the bottom-right corner of the page showing the last time this tab was controlled, and updates it on every subsequent command. It has three states: **yellow with a bright red border and a pulse** the instant a command fires, settling to **plain yellow** a few seconds later (still under control, just not that instant), and fading to **black** after 2 minutes with no commands at all. While it's on, every command also flashes the tab's favicon to the extension's own icon (a dark lightning bolt on a bright yellow circle) for the same few seconds as the border — both share one timer (`FLASH_MS`, 5s) that resets on every new command, so back-to-back activity keeps them up rather than letting them flicker. `annotate off` removes both. It only works on a normal `http(s)` page already showing content — like the rest of the commands, it refuses a blank or restricted tab (`about:blank`, a fresh new-tab page, `chrome://…`). Both live in the page itself, so navigating or reloading clears them; run `annotate on` again afterward if you want them back.
 
 ```bash
 browser-session-ctl annotate on
@@ -156,9 +156,10 @@ browser-session-ctl debug-set-favicon on
 browser-session-ctl debug-set-favicon off
 ```
 
-`debug-annotate-highlight active` forces the bar straight into its active (yellow, pulsing) state, and `debug-annotate-highlight idle` forces it straight to black — instantly, without waiting on a real command or the 2-minute timeout. Requires `annotate on` already be running on that tab.
+`debug-annotate-highlight` forces the bar straight into one of its three states — `action` (yellow + red border + pulse), `active` (plain yellow), or `idle` (black) — instantly, without waiting on a real command or either timeout. Requires `annotate on` already be running on that tab.
 
 ```bash
+browser-session-ctl debug-annotate-highlight action
 browser-session-ctl debug-annotate-highlight active
 browser-session-ctl debug-annotate-highlight idle
 ```
