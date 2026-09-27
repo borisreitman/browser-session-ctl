@@ -28,6 +28,7 @@ Usage:
   browser-session-ctl scroll [up|down]
   browser-session-ctl screenshot [path]
   browser-session-ctl annotate [on|off]
+  browser-session-ctl debug-set-favicon [on|off]
 
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
@@ -42,6 +43,8 @@ Examples:
   browser-session-ctl close --tab 123456789
   browser-session-ctl annotate on
   browser-session-ctl annotate off
+  browser-session-ctl debug-set-favicon on
+  browser-session-ctl debug-set-favicon off
 `;
 
 function printUsage() {
@@ -214,6 +217,14 @@ async function main(argv) {
       const arg = (rest[0] || "on").toLowerCase();
       if (arg !== "on" && arg !== "off") throw new Error("annotate expects on or off");
       printResult(await command("page.annotate", withTab({ enabled: arg === "on" }, tabId)));
+      return;
+    }
+    case "debug-set-favicon": {
+      const arg = (rest[0] || "on").toLowerCase();
+      if (arg !== "on" && arg !== "off") throw new Error("debug-set-favicon expects on or off");
+      printResult(
+        await command("page.debugSetFavicon", withTab({ enabled: arg === "on" }, tabId))
+      );
       return;
     }
     default:

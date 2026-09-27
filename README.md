@@ -149,6 +149,13 @@ browser-session-ctl annotate on
 browser-session-ctl annotate off
 ```
 
+`debug-set-favicon on` swaps the tab's favicon to that same extension icon and leaves it there (no auto-revert, and it ignores whether `annotate` is on) — a quick way to confirm the swap mechanism itself actually works on a given tab. `debug-set-favicon off` restores it.
+
+```bash
+browser-session-ctl debug-set-favicon on
+browser-session-ctl debug-set-favicon off
+```
+
 JSON works too:
 
 ```bash

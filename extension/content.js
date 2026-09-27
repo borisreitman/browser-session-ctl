@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 9;
+  const VERSION = 10;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
@@ -37,13 +37,7 @@
     faviconState = null;
   }
 
-  // Blinks the tab's favicon to the extension's own icon for a moment, so
-  // it is visible that something just controlled this tab. Only while
-  // annotate is on — the bar's presence is the on/off flag for this too.
-  function flashFavicon() {
-    if (!document.getElementById(ANNOTATE_BAR_ID)) return;
-
-    clearTimeout(faviconTimer);
+  function applyFaviconFlash() {
     if (!faviconState) {
       const links = [...document.querySelectorAll('link[rel~="icon"]')];
       if (links.length === 0) {
@@ -60,8 +54,30 @@
     }
     const targets = faviconState.created ? [faviconState.created] : faviconState.links.map((l) => l.el);
     for (const el of targets) el.setAttribute("href", FAVICON_FLASH_URI);
+  }
 
+  // Blinks the tab's favicon to the extension's own icon for a moment, so
+  // it is visible that something just controlled this tab. Only while
+  // annotate is on — the bar's presence is the on/off flag for this too.
+  function flashFavicon() {
+    if (!document.getElementById(ANNOTATE_BAR_ID)) return;
+    clearTimeout(faviconTimer);
+    applyFaviconFlash();
     faviconTimer = setTimeout(restoreFavicon, FAVICON_FLASH_MS);
+  }
+
+  // Unlike flashFavicon, ignores the annotate on/off state and doesn't
+  // auto-revert — for `debug-set-favicon` to confirm the swap mechanism
+  // actually works on a given tab, independent of the annotate feature.
+  function debugSetFavicon(enabled) {
+    clearTimeout(faviconTimer);
+    faviconTimer = null;
+    if (!enabled) {
+      restoreFavicon();
+      return { enabled: false };
+    }
+    applyFaviconFlash();
+    return { enabled: true };
   }
 
   function renderAnnotateBar() {
@@ -632,6 +648,9 @@
         break;
       case "annotate":
         reply(() => setAnnotate(message.enabled !== false));
+        break;
+      case "debug-set-favicon":
+        reply(() => debugSetFavicon(message.enabled !== false));
         break;
       default:
         reply(() => {

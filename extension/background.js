@@ -150,7 +150,7 @@ async function getTabOrThrow(tabId) {
   }
 }
 
-const PAGE_SCRIPT_VERSION = 9;
+const PAGE_SCRIPT_VERSION = 10;
 
 async function pageScriptVersion(tabId) {
   try {
@@ -496,6 +496,13 @@ async function handleCommand(message) {
       const tab = await tabById(params.tabId);
       return unwrap(
         await sendToPage(tab, { action: "annotate", enabled: params.enabled !== false })
+      );
+    }
+
+    case "page.debugSetFavicon": {
+      const tab = await tabById(params.tabId);
+      return unwrap(
+        await sendToPage(tab, { action: "debug-set-favicon", enabled: params.enabled !== false })
       );
     }
 
