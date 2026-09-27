@@ -114,11 +114,31 @@ function connect(url) {
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab?.id) throw new Error("No active Chrome tab");
-  return tab;
+  if (!isRestricted(tab.url)) return tab;
+
+  const all = await chrome.tabs.query({});
+  const normal = all.filter((t) => !isRestricted(t.url));
+  normal.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+  const fallback = normal[0];
+  if (!fallback) {
+    throw new Error(
+      `The focused tab (${tab.url}) cannot be automated and no other normal http(s) tab is open.`
+    );
+  }
+  return fallback;
 }
 
 async function tabById(tabId) {
-  if (tabId == null) return activeTab();
+  const tab = tabId == null ? await activeTab() : await getTabOrThrow(tabId);
+  if (isRestricted(tab.url)) {
+    throw new Error(
+      `This page cannot be automated (${tab.url}). Switch to a normal http(s) tab.`
+    );
+  }
+  return tab;
+}
+
+async function getTabOrThrow(tabId) {
   try {
     return await chrome.tabs.get(tabId);
   } catch {
@@ -149,11 +169,6 @@ async function inject(tabId) {
 }
 
 async function sendToPage(tab, payload) {
-  if (isRestricted(tab.url)) {
-    throw new Error(
-      `This page cannot be automated (${tab.url}). Switch to a normal http(s) tab.`
-    );
-  }
   const message = { source: "browser-session-ctl-v3", ...payload };
   await inject(tab.id);
   let lastError;
