@@ -142,7 +142,7 @@ Screenshot of a background `--tab` will briefly focus that tab (Chrome can only 
 
 `options` reads every choice on a dropdown from the DOM (`<select>` options, listbox items, custom menus). If the menu is closed and empty, it opens the control and slurps again.
 
-`annotate on` overlays a bar at the top of the page showing the last time this tab was controlled, and updates it on every subsequent command. `annotate off` removes it. It only works on a normal `http(s)` page already showing content — like the rest of the commands, it refuses a blank or restricted tab (`about:blank`, a fresh new-tab page, `chrome://…`). The bar lives in the page itself, so navigating or reloading clears it; run `annotate on` again afterward if you want it back.
+`annotate on` overlays a small status pill in the bottom-right corner of the page showing the last time this tab was controlled, and updates it on every subsequent command. It turns yellow (dark text) while a command is actively touching the tab, and fades to black (white text) after about a minute of inactivity. `annotate off` removes it. It only works on a normal `http(s)` page already showing content — like the rest of the commands, it refuses a blank or restricted tab (`about:blank`, a fresh new-tab page, `chrome://…`). The bar lives in the page itself, so navigating or reloading clears it; run `annotate on` again afterward if you want it back.
 
 ```bash
 browser-session-ctl annotate on

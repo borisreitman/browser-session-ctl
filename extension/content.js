@@ -1,11 +1,19 @@
 (() => {
-  const VERSION = 6;
+  const VERSION = 8;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
   const refs = new Map();
   const ANNOTATE_BAR_ID = "__browser-session-ctl-annotate-bar__";
+  // How long the bar stays yellow after the last command before fading to
+  // black. Tune this if it feels too eager or too sluggish.
+  const ANNOTATE_ACTIVE_MS = 60000;
+  const ANNOTATE_ACTIVE_BG = "#facc15";
+  const ANNOTATE_ACTIVE_FG = "#111827";
+  const ANNOTATE_IDLE_BG = "#111827";
+  const ANNOTATE_IDLE_FG = "#ffffff";
   let lastControlledAt = null;
+  let annotateIdleTimer = null;
 
   function renderAnnotateBar() {
     const bar = document.getElementById(ANNOTATE_BAR_ID);
@@ -14,31 +22,48 @@
     bar.textContent = `browser-session-ctl — last controlled ${when}`;
   }
 
+  function setAnnotateColors(active) {
+    const bar = document.getElementById(ANNOTATE_BAR_ID);
+    if (!bar) return;
+    bar.style.background = active ? ANNOTATE_ACTIVE_BG : ANNOTATE_IDLE_BG;
+    bar.style.color = active ? ANNOTATE_ACTIVE_FG : ANNOTATE_IDLE_FG;
+  }
+
+  // Yellow while a command is actively touching this tab, back to black
+  // once it has been quiet for a bit.
+  function markAnnotateActive() {
+    clearTimeout(annotateIdleTimer);
+    if (!document.getElementById(ANNOTATE_BAR_ID)) return;
+    setAnnotateColors(true);
+    annotateIdleTimer = setTimeout(() => setAnnotateColors(false), ANNOTATE_ACTIVE_MS);
+  }
+
   function setAnnotate(enabled) {
-    const existing = document.getElementById(ANNOTATE_BAR_ID);
+    let bar = document.getElementById(ANNOTATE_BAR_ID);
     if (!enabled) {
-      existing?.remove();
+      clearTimeout(annotateIdleTimer);
+      bar?.remove();
       return { enabled: false };
     }
-    if (!existing) {
-      const bar = document.createElement("div");
+    if (!bar) {
+      bar = document.createElement("div");
       bar.id = ANNOTATE_BAR_ID;
       bar.style.cssText = [
         "position: fixed",
         "bottom: 8px",
         "right: 8px",
         "z-index: 2147483647",
-        "background: #111827",
-        "color: #fff",
         "font: 12px/1.6 -apple-system, BlinkMacSystemFont, sans-serif",
         "text-align: right",
         "padding: 2px 8px",
         "border-radius: 4px",
         "pointer-events: none",
+        "transition: background 0.2s ease, color 0.2s ease",
       ].join("; ");
       (document.body || document.documentElement).appendChild(bar);
     }
     renderAnnotateBar();
+    markAnnotateActive();
     return { enabled: true };
   }
 
@@ -500,6 +525,7 @@
     if (!message || message.source !== "browser-session-ctl-v3") return;
     lastControlledAt = Date.now();
     renderAnnotateBar();
+    markAnnotateActive();
     const reply = (work) => {
       Promise.resolve()
         .then(work)
