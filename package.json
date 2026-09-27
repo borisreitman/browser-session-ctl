@@ -11,6 +11,7 @@
   "scripts": {
     "start": "node sidecar/server.mjs",
     "ctl": "node sidecar/cli.mjs",
+    "test": "node tests/run.mjs",
     "trace-render": "node scripts/trace-render.js"
   },
   "engines": {

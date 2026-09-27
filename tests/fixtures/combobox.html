@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Combobox Fixture</title></head>
+<body>
+<h1>Combobox Fixture</h1>
+
+<p>Static: options are reachable via aria-controls without opening the menu.</p>
+<button id="fruit" role="combobox" aria-haspopup="listbox" aria-controls="fruit-menu" aria-expanded="false">
+  Pick a fruit
+</button>
+<ul id="fruit-menu" role="listbox" style="display: none;">
+  <li role="option" data-value="apple">Apple</li>
+  <li role="option" data-value="banana">Banana</li>
+  <li role="option" data-value="cherry">Cherry</li>
+</ul>
+
+<p>Dynamic: options only exist in the DOM after the trigger is clicked.</p>
+<button id="size" role="combobox" aria-haspopup="listbox" aria-expanded="false">
+  Pick a size
+</button>
+<div id="size-host"></div>
+
+<script>
+  const sizeTrigger = document.getElementById("size");
+  const sizeHost = document.getElementById("size-host");
+  const sizes = ["Small", "Medium", "Large"];
+  sizeTrigger.addEventListener("click", () => {
+    if (sizeHost.firstElementChild) {
+      sizeHost.innerHTML = "";
+      sizeTrigger.setAttribute("aria-expanded", "false");
+      return;
+    }
+    sizeTrigger.setAttribute("aria-expanded", "true");
+    const ul = document.createElement("ul");
+    ul.setAttribute("role", "listbox");
+    for (const label of sizes) {
+      const li = document.createElement("li");
+      li.setAttribute("role", "option");
+      li.textContent = label;
+      ul.appendChild(li);
+    }
+    sizeHost.appendChild(ul);
+  });
+</script>
+</body>
+</html>

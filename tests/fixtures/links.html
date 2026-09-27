@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Links Fixture</title></head>
+<body>
+<h1>Links Fixture</h1>
+<nav>
+  <a href="form.html">Go to form</a>
+</nav>
+<button id="counter" data-count="0">Clicked 0 times</button>
+<script>
+  const btn = document.getElementById("counter");
+  btn.addEventListener("click", () => {
+    const n = Number(btn.dataset.count) + 1;
+    btn.dataset.count = String(n);
+    btn.textContent = `Clicked ${n} times`;
+  });
+</script>
+</body>
+</html>

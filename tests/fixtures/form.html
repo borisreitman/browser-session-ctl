@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Form Fixture</title></head>
+<body>
+<h1>Form Fixture</h1>
+<form id="f">
+  <label>Full name <input type="text" name="fullname"></label><br>
+  <label>Bio <textarea name="bio"></textarea></label><br>
+  <label><input type="checkbox" name="subscribe"> Subscribe to newsletter</label><br>
+  <label><input type="radio" name="plan" value="free"> Free</label>
+  <label><input type="radio" name="plan" value="pro"> Pro</label><br>
+  <button type="submit">Submit</button>
+</form>
+<div id="result"></div>
+<script>
+  document.getElementById("f").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const data = new FormData(e.target);
+    document.getElementById("result").textContent =
+      "Submitted: " + [...data.entries()].map(([k, v]) => `${k}=${v}`).join("&");
+  });
+</script>
+</body>
+</html>

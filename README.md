@@ -150,6 +150,16 @@ curl -s http://127.0.0.1:8765/command \
   -d '{"method":"page.snapshot"}'
 ```
 
+## Tests
+
+An end-to-end suite drives the sidecar + extension against local fixtures (`tests/fixtures/*.html`, loaded via `file://`) covering native `<select>` dropdowns, custom ARIA comboboxes/listboxes, form fields, and click-by-ref / click-by-text. It requires the sidecar running and the extension connected, plus **"Allow access to file URLs"** enabled for the extension (`chrome://extensions` → browser-session-ctl → Details), since Chrome blocks `file://` scripting for extensions by default.
+
+```bash
+npm test
+```
+
+It starts from whatever tab is currently active, opens one new tab for testing, and leaves that tab open afterward for inspection (set `CLOSE_TAB=1` to have it close the tab itself instead).
+
 ## Render a trace
 
 A trace is a markdown log of commands, snapshot listings, and viewport screenshots (see [doc/demo-trace.md](doc/demo-trace.md)). Put images in a folder with the same name (`doc/demo-trace/`), then:

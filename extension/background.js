@@ -376,6 +376,13 @@ async function handleCommand(message) {
       }
     }
 
+    case "tabs.close": {
+      if (params.tabId == null) throw new Error("tabId is required");
+      const tab = await getTabOrThrow(params.tabId);
+      await chrome.tabs.remove(tab.id);
+      return { id: tab.id, closed: true };
+    }
+
     case "page.navigate": {
       if (!params.url) throw new Error("url is required");
       const tab = await tabById(params.tabId);
