@@ -344,6 +344,23 @@ async function handleCommand(message) {
       };
     }
 
+    case "tabs.open": {
+      const tab = await chrome.tabs.create({
+        url: params.url || undefined,
+        active: params.active !== false,
+      });
+      if (!params.url) {
+        return { id: tab.id, windowId: tab.windowId, title: tab.title, url: tab.url };
+      }
+      try {
+        const done = await waitForComplete(tab.id);
+        return { id: done.id, windowId: done.windowId, title: done.title, url: done.url };
+      } catch {
+        const current = await chrome.tabs.get(tab.id);
+        return { id: current.id, windowId: current.windowId, title: current.title, url: current.url };
+      }
+    }
+
     case "page.navigate": {
       if (!params.url) throw new Error("url is required");
       const tab = await tabById(params.tabId);

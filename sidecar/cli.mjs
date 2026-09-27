@@ -15,6 +15,7 @@ Usage:
   browser-session-ctl status
   browser-session-ctl tabs
   browser-session-ctl active
+  browser-session-ctl open [url] [--background]
   browser-session-ctl nav <url>
   browser-session-ctl back | forward | reload
   browser-session-ctl snapshot
@@ -34,6 +35,8 @@ Examples:
   browser-session-ctl click e4
   browser-session-ctl tabs
   browser-session-ctl snapshot --tab 123456789
+  browser-session-ctl open https://example.com
+  browser-session-ctl open https://example.com --background
 `;
 
 function printUsage() {
@@ -117,6 +120,13 @@ async function main(argv) {
     case "active":
       printResult(await command("tabs.active"));
       return;
+    case "open": {
+      const background = rest.includes("--background");
+      const args = rest.filter((arg) => arg !== "--background");
+      const url = args[0];
+      printResult(await command("tabs.open", { url, active: !background }));
+      return;
+    }
     case "nav":
     case "navigate": {
       const url = rest[0];

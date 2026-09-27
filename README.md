@@ -106,6 +106,7 @@ browser-session-ctl snapshot
 ```bash
 browser-session-ctl tabs
 browser-session-ctl active
+browser-session-ctl open https://example.com
 browser-session-ctl nav https://example.com
 browser-session-ctl snapshot
 browser-session-ctl click e4
@@ -115,6 +116,14 @@ browser-session-ctl type e2 hello@example.com
 browser-session-ctl press Enter
 browser-session-ctl text
 browser-session-ctl screenshot /tmp/page.png
+```
+
+`open [url]` creates a new tab and prints its `id` right away, so you can target it with `--tab <id>` on the very next command without first running `tabs` to look it up. Add `--background` to open it without switching focus.
+
+```bash
+browser-session-ctl open https://example.com
+# { "id": 123456789, "windowId": ..., "title": "Example Domain", "url": "https://example.com/" }
+browser-session-ctl snapshot --tab 123456789
 ```
 
 By default every command uses the **currently active tab** — the selected tab in the Chrome window you last focused. That is looked up again on each command; the sidecar does not remember a tab.
