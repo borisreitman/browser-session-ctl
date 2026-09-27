@@ -152,13 +152,27 @@ curl -s http://127.0.0.1:8765/command \
 
 ## Tests
 
-An end-to-end suite drives the sidecar + extension against local fixtures (`tests/fixtures/*.html`, loaded via `file://`) covering native `<select>` dropdowns, custom ARIA comboboxes/listboxes, form fields, and click-by-ref / click-by-text. It requires the sidecar running and the extension connected, plus **"Allow access to file URLs"** enabled for the extension (`chrome://extensions` → browser-session-ctl → Details), since Chrome blocks `file://` scripting for extensions by default.
+An end-to-end suite (`tests/run.mjs`) drives the sidecar + extension against local fixtures (`tests/fixtures/*.html`, loaded via `file://`) covering native `<select>` dropdowns, custom ARIA comboboxes/listboxes, form fields, and click-by-ref / click-by-text.
 
-```bash
-npm test
+1. The sidecar must be running and the extension connected — see [Confirm it is connected](#4-confirm-it-is-connected).
+2. Chrome blocks `file://` scripting for extensions by default, so turn on **Allow access to file URLs**: `chrome://extensions` → the **browser-session-ctl** card → **Details** → toggle it on.
+3. Run the suite:
+
+   ```bash
+   npm test
+   ```
+
+It starts from whatever tab is currently active, opens one new tab in the foreground so you can watch it work, and runs every fixture in that tab. A passing run ends with:
+
+```
+15 passed, 0 failed
 ```
 
-It starts from whatever tab is currently active, opens one new tab for testing, and leaves that tab open afterward for inspection (set `CLOSE_TAB=1` to have it close the tab itself instead).
+The tab is left open afterward for inspection. Set `CLOSE_TAB=1` to have the suite close it automatically instead:
+
+```bash
+CLOSE_TAB=1 npm test
+```
 
 ## Render a trace
 
