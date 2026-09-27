@@ -30,6 +30,7 @@ Usage:
   browser-session-ctl annotate [on|off]
   browser-session-ctl debug-set-favicon [on|off]
   browser-session-ctl debug-annotate-highlight [action|active|idle]
+  browser-session-ctl config annotate-new-tabs [on|off]
 
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
@@ -49,6 +50,8 @@ Examples:
   browser-session-ctl debug-annotate-highlight action
   browser-session-ctl debug-annotate-highlight active
   browser-session-ctl debug-annotate-highlight idle
+  browser-session-ctl config annotate-new-tabs
+  browser-session-ctl config annotate-new-tabs off
 `;
 
 function printUsage() {
@@ -239,6 +242,24 @@ async function main(argv) {
       printResult(
         await command("page.debugAnnotateHighlight", withTab({ state: arg }, tabId))
       );
+      return;
+    }
+    case "config": {
+      const SETTINGS = { "annotate-new-tabs": "annotateNewTabs" };
+      const name = rest[0];
+      const key = name && SETTINGS[name];
+      if (!key) {
+        throw new Error(`config expects a known setting name, e.g. ${Object.keys(SETTINGS).join(", ")}`);
+      }
+      if (rest[1] === undefined) {
+        const settings = await command("settings.get");
+        printResult({ [name]: settings[key] ? "on" : "off" });
+        return;
+      }
+      const value = rest[1].toLowerCase();
+      if (value !== "on" && value !== "off") throw new Error("config value must be on or off");
+      const settings = await command("settings.set", { key, value: value === "on" });
+      printResult({ [name]: settings[key] ? "on" : "off" });
       return;
     }
     default:

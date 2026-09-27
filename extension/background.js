@@ -21,6 +21,21 @@ async function getPort() {
   return Number(port) || DEFAULT_PORT;
 }
 
+const DEFAULT_SETTINGS = { annotateNewTabs: true };
+
+async function getSettings() {
+  const { settings } = await chrome.storage.local.get({ settings: DEFAULT_SETTINGS });
+  return { ...DEFAULT_SETTINGS, ...settings };
+}
+
+async function setSetting(key, value) {
+  if (!(key in DEFAULT_SETTINGS)) throw new Error(`Unknown setting: ${key}`);
+  const settings = await getSettings();
+  settings[key] = value;
+  await chrome.storage.local.set({ settings });
+  return settings;
+}
+
 async function setStatus(partial) {
   const current = await chrome.storage.local.get({
     connected: false,
@@ -341,6 +356,14 @@ async function handleCommand(message) {
     case "ping":
       return { pong: true, at: Date.now() };
 
+    case "settings.get":
+      return await getSettings();
+
+    case "settings.set": {
+      if (!params.key) throw new Error("key is required");
+      return await setSetting(params.key, Boolean(params.value));
+    }
+
     case "tabs.list": {
       const tabs = await chrome.tabs.query({});
       return tabs.map((tab) => ({
@@ -381,13 +404,26 @@ async function handleCommand(message) {
       if (!params.url) {
         return { id: tab.id, windowId: tab.windowId, title: tab.title, url: tab.url };
       }
+
+      let finalTab;
       try {
-        const done = await waitForComplete(tab.id);
-        return { id: done.id, windowId: done.windowId, title: done.title, url: done.url };
+        finalTab = await waitForComplete(tab.id);
       } catch {
-        const finalTab = await chrome.tabs.get(tab.id);
-        return { id: finalTab.id, windowId: finalTab.windowId, title: finalTab.title, url: finalTab.url };
+        finalTab = await chrome.tabs.get(tab.id);
       }
+
+      if (!isRestricted(finalTab.url)) {
+        const settings = await getSettings();
+        if (settings.annotateNewTabs) {
+          try {
+            await sendToPage(finalTab, { action: "annotate", enabled: true });
+          } catch {
+            // Best effort — don't fail the open just because annotate couldn't attach.
+          }
+        }
+      }
+
+      return { id: finalTab.id, windowId: finalTab.windowId, title: finalTab.title, url: finalTab.url };
     }
 
     case "tabs.close": {

@@ -118,7 +118,7 @@ browser-session-ctl text
 browser-session-ctl screenshot /tmp/page.png
 ```
 
-`open [url]` creates a new tab and prints its `id` right away, so you can target it with `--tab <id>` on the very next command without first running `tabs` to look it up. Add `--background` to open it without switching focus. If the currently active tab is blank (`about:blank` or a fresh new-tab page), it reuses that tab instead of opening another one.
+`open [url]` creates a new tab and prints its `id` right away, so you can target it with `--tab <id>` on the very next command without first running `tabs` to look it up. Add `--background` to open it without switching focus. If the currently active tab is blank (`about:blank` or a fresh new-tab page), it reuses that tab instead of opening another one. By default it also turns `annotate` on for the page it opens — see `config annotate-new-tabs` below to change that.
 
 ```bash
 browser-session-ctl open https://example.com
@@ -162,6 +162,13 @@ browser-session-ctl debug-set-favicon off
 browser-session-ctl debug-annotate-highlight action
 browser-session-ctl debug-annotate-highlight active
 browser-session-ctl debug-annotate-highlight idle
+```
+
+`config annotate-new-tabs [on|off]` is a persistent global setting (stored in the extension, survives restarts) controlling whether `open <url>` automatically turns `annotate` on for the page it opens. **Default: on.** Run it with no value to read the current setting.
+
+```bash
+browser-session-ctl config annotate-new-tabs
+browser-session-ctl config annotate-new-tabs off
 ```
 
 JSON works too:
