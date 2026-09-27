@@ -164,9 +164,10 @@ browser-session-ctl debug-annotate-highlight active
 browser-session-ctl debug-annotate-highlight idle
 ```
 
-`config annotate-new-tabs [on|off]` is a persistent global setting (stored in the extension, survives restarts) controlling whether `open <url>` automatically turns `annotate` on for the page it opens. **Default: on.** Run it with no value to read the current setting.
+`config annotate-new-tabs [on|off]` is a persistent global setting (stored in the extension, survives restarts) controlling whether `open <url>` automatically turns `annotate` on for the page it opens. **Default: on.** Run it with no value to read the current setting. Run `config` with no setting name at all to print every global setting at once.
 
 ```bash
+browser-session-ctl config
 browser-session-ctl config annotate-new-tabs
 browser-session-ctl config annotate-new-tabs off
 ```
