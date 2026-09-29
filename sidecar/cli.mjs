@@ -1,6 +1,13 @@
 #!/usr/bin/env node
-import { writeFile } from "node:fs/promises";
+import { writeFile, readFile, readdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { origin } from "./config.mjs";
+
+// This repo's plugins/ dir — never shipped with the extension, only ever
+// handed to it at runtime via plugin.load. See PLUGINS_DIR below and
+// plugin.<namespace>'s auto-load fallback.
+const PLUGINS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "plugins");
 
 const USAGE = `Drive a Chrome tab from the shell.
 
@@ -32,6 +39,10 @@ Usage:
   browser-session-ctl debug-annotate-highlight [action|active|idle]
   browser-session-ctl config
   browser-session-ctl config annotate-new-tabs [on|off]
+  browser-session-ctl plugin.<namespace> [args...]
+  browser-session-ctl plugin-list
+  browser-session-ctl plugin-load <namespace> <file.js>
+  browser-session-ctl plugin-unload <namespace>
 
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
@@ -53,6 +64,11 @@ Examples:
   browser-session-ctl debug-annotate-highlight idle
   browser-session-ctl config annotate-new-tabs
   browser-session-ctl config annotate-new-tabs off
+  browser-session-ctl plugin.jupyter-notebook cells
+  browser-session-ctl plugin-list
+  browser-session-ctl plugin-load my-thing ./my-thing.js
+  browser-session-ctl plugin.my-thing foo bar
+  browser-session-ctl plugin-unload my-thing
 `;
 
 function printUsage() {
@@ -116,12 +132,45 @@ function printResult(result) {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
+// The extension itself never ships plugin code — a namespace only exists in
+// its runtime plugin map once something has plugin.load'd it. This repo
+// ships plugins/*.js as source you can read, not as part of the extension
+// package; the CLI is what bridges the two, loading a matching repo file on
+// first use so `plugin.<namespace>` still works without an explicit
+// plugin-load. A namespace loaded by hand (or from your own file, elsewhere
+// on disk) always takes priority, since we only fall back to this when the
+// extension reports the namespace as unknown.
+async function invokePluginAutoLoad(namespace, args, tabId) {
+  try {
+    return await command("plugin.invoke", withTab({ namespace, args }, tabId));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/^Unknown plugin namespace/.test(message)) throw err;
+    const path = join(PLUGINS_DIR, `${namespace}.js`);
+    let code;
+    try {
+      code = await readFile(path, "utf8");
+    } catch {
+      throw err; // no repo plugin by that name either — surface the original error
+    }
+    await command("plugin.load", { namespace, code });
+    return await command("plugin.invoke", withTab({ namespace, args }, tabId));
+  }
+}
+
 async function main(argv) {
   const { tabId, positional } = parseArgs(argv);
   const [verb, ...rest] = positional;
   if (!verb || verb === "-h" || verb === "--help") {
     printUsage();
     process.exit(verb ? 0 : 1);
+  }
+
+  if (verb.startsWith("plugin.")) {
+    const namespace = verb.slice("plugin.".length);
+    if (!namespace) throw new Error("plugin namespace is required, e.g. plugin.jupyter-notebook");
+    printResult(await invokePluginAutoLoad(namespace, rest, tabId));
+    return;
   }
 
   switch (verb) {
@@ -270,6 +319,32 @@ async function main(argv) {
       if (value !== "on" && value !== "off") throw new Error("config value must be on or off");
       const settings = await command("settings.set", { key, value: value === "on" });
       printResult({ [name]: settings[key] ? "on" : "off" });
+      return;
+    }
+    case "plugin-list": {
+      const { loaded } = await command("plugin.list");
+      let inRepo = [];
+      try {
+        inRepo = (await readdir(PLUGINS_DIR))
+          .filter((f) => f.endsWith(".js"))
+          .map((f) => f.slice(0, -3));
+      } catch {
+        // No plugins/ dir — fine, just nothing to offer.
+      }
+      printResult({ loaded, inRepo });
+      return;
+    }
+    case "plugin-load": {
+      const [namespace, filePath] = rest;
+      if (!namespace || !filePath) throw new Error("usage: plugin-load <namespace> <file.js>");
+      const code = await readFile(filePath, "utf8");
+      printResult(await command("plugin.load", { namespace, code }));
+      return;
+    }
+    case "plugin-unload": {
+      const namespace = rest[0];
+      if (!namespace) throw new Error("usage: plugin-unload <namespace>");
+      printResult(await command("plugin.unload", { namespace }));
       return;
     }
     default:

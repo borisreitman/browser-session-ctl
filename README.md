@@ -167,6 +167,62 @@ curl -s http://127.0.0.1:8765/command \
   -d '{"method":"page.snapshot"}'
 ```
 
+## Plugins
+
+Plugins let you run your own JS against a tab's page — for sites the built-in commands don't cover (like manipulating a Jupyter notebook's cells). A plugin is a JS file that defines a class named `Plugin`; one instance is created per namespace, per tab's page, so it can keep its own state on `this` across calls. Namespaces keep plugins from clashing with each other or with anything else on the page.
+
+```bash
+browser-session-ctl plugin.<namespace> <method> [args...]
+```
+
+The part after `plugin.` is the namespace, and the first positional argument is a method name on that namespace's `Plugin` instance; anything after it is passed straight through as that method's arguments (as strings).
+
+```bash
+browser-session-ctl plugin.jupyter-notebook cells
+browser-session-ctl plugin.jupyter-notebook get 2
+browser-session-ctl plugin.jupyter-notebook set 2 "print('hi')"
+browser-session-ctl plugin.jupyter-notebook run 2
+```
+
+Every plugin should implement a `help()` method describing its own methods and usage. Omit the method name entirely and it's called for you:
+
+```bash
+browser-session-ctl plugin.jupyter-notebook
+# falls back to that plugin's help() if it has one
+```
+
+**The extension itself never ships any plugin code.** A namespace only exists once its source has been handed to the extension at runtime via `plugin.load` — it's kept in the service worker's memory, never written to disk inside the extension. This repo ships some plugins as plain source files in `plugins/` (outside `extension/` entirely, so they're never part of the packaged/loaded extension), and the CLI bridges the two: the first time you invoke a namespace the extension doesn't already have loaded, it transparently reads the matching `plugins/<namespace>.js` file and loads it for you.
+
+```bash
+browser-session-ctl plugin.jupyter-notebook cells
+# extension doesn't know "jupyter-notebook" yet, so the CLI reads
+# plugins/jupyter-notebook.js and plugin.load's it first, then invokes
+```
+
+You can also load your own plugin from any local file — it does not need to live in this repo at all, and (since it's loaded explicitly) it always takes priority over a same-named file in `plugins/`:
+
+```bash
+browser-session-ctl plugin-load my-thing ./my-thing.js
+browser-session-ctl plugin.my-thing foo bar
+browser-session-ctl plugin-unload my-thing
+browser-session-ctl plugin-list
+```
+
+`plugin-load <namespace> <file.js>` reads that file's contents on your machine and hands the source to the extension, which keeps it in memory keyed by namespace. Re-running `plugin-load` for a namespace you already loaded replaces it: the next invocation gets a fresh `Plugin` instance built from the new code. `plugin-list` shows both what the extension currently has loaded (`loaded`) and what's available to auto-load from this repo's `plugins/` dir (`inRepo`); `plugin-unload <namespace>` drops a loaded one.
+
+Loaded plugin source lives only in the service worker's memory, so it (and any state a plugin instance was holding) disappears whenever the service worker restarts: an extension reload, a browser restart, or Chrome evicting an idle worker. Just invoke it again afterward — for a repo plugin the CLI reloads it automatically; for your own file, run `plugin-load` again.
+
+`doc/hello-world-plugin.js` is a minimal runnable example:
+
+```bash
+browser-session-ctl plugin-load hello doc/hello-world-plugin.js
+browser-session-ctl plugin.hello greet Boris
+# { "namespace": "hello", "value": { "message": "Hello, Boris!", "calls": 1, ... } }
+browser-session-ctl plugin-unload hello
+```
+
+It runs in the page's own JS world (`document`, `window`, and any of the page's own globals are all in scope, just like a snippet pasted into DevTools' console on that tab), and whatever a method returns becomes the CLI's JSON result — it must be structured-cloneable (plain objects/arrays/primitives, no DOM nodes or functions).
+
 ## Debug commands
 
 Only useful for troubleshooting the `annotate` mechanism itself — not needed for normal use.

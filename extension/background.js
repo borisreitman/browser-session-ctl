@@ -36,6 +36,81 @@ async function setSetting(key, value) {
   return settings;
 }
 
+// Plugins are namespaced JS snippets injected into the page's own JS world at
+// invoke time — the extension never ships any plugin code itself. A
+// namespace only exists once its source has been handed to us over the wire
+// via plugin.load (the CLI's plugin-load command, or a `plugin.<namespace>`
+// invocation that auto-loads one of the repo's plugins/*.js files — see
+// sidecar/cli.mjs). Sources live only in this Map, so they — and any
+// per-page state they left behind on window.__bscPluginState — vanish
+// whenever the service worker restarts (extension reload, browser restart).
+const runtimePlugins = new Map(); // namespace -> source code
+
+const NAMESPACE_RE = /^[a-z0-9][a-z0-9-]*$/i;
+
+function requireNamespace(namespace) {
+  if (!namespace || !NAMESPACE_RE.test(namespace)) {
+    throw new Error(
+      `Invalid plugin namespace "${namespace}". Use letters, digits, and dashes, e.g. "jupyter-notebook".`
+    );
+  }
+  return namespace;
+}
+
+function pluginSource(namespace) {
+  if (runtimePlugins.has(namespace)) return runtimePlugins.get(namespace);
+  throw new Error(`Unknown plugin namespace "${namespace}". Load it first with plugin.load.`);
+}
+
+async function invokePlugin(tab, namespace, args) {
+  requireNamespace(namespace);
+  const code = pluginSource(namespace);
+  const [action, ...rest] = args;
+  const [injection] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "MAIN",
+    args: [namespace, code, action ?? null, rest],
+    func: async (namespace, code, action, rest) => {
+      try {
+        // Each plugin file defines a class named `Plugin`. One instance per
+        // namespace is kept on window.__bscPluginState so the plugin can
+        // hold its own state across calls on `this` — until the page
+        // reloads or the source changes, at which point we make a fresh
+        // instance.
+        window.__bscPluginState = window.__bscPluginState || {};
+        const slot = (window.__bscPluginState[namespace] ||= {});
+        if (!slot.instance || slot.source !== code) {
+          const PluginClass = new Function(`"use strict";\n${code}\n;return Plugin;`)();
+          if (typeof PluginClass !== "function") {
+            throw new Error('Plugin file must define a class named "Plugin".');
+          }
+          slot.instance = new PluginClass();
+          slot.source = code;
+        }
+        // No method given: fall back to the plugin's own `help()` if it has
+        // one, so `plugin.<namespace>` alone is a usable "what can this do".
+        const resolvedAction = action || (typeof slot.instance.help === "function" ? "help" : null);
+        if (!resolvedAction) {
+          throw new Error(
+            `A method name is required, e.g. plugin.${namespace} <method> [args...]. This plugin has no help() to fall back to.`
+          );
+        }
+        const method = slot.instance[resolvedAction];
+        if (typeof method !== "function") {
+          throw new Error(`Plugin "${namespace}" has no method "${resolvedAction}"`);
+        }
+        const value = await method.apply(slot.instance, resolvedAction === action ? rest : []);
+        return { ok: true, value: value === undefined ? null : value };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  });
+  const payload = injection?.result;
+  if (!payload?.ok) throw new Error(payload?.error || "Plugin failed with no error message");
+  return payload.value;
+}
+
 async function setStatus(partial) {
   const current = await chrome.storage.local.get({
     connected: false,
@@ -572,6 +647,33 @@ async function handleCommand(message) {
       }
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
       return { dataUrl, url: tab.url, title: tab.title };
+    }
+
+    case "plugin.list": {
+      return { loaded: [...runtimePlugins.keys()] };
+    }
+
+    case "plugin.load": {
+      const namespace = requireNamespace(params.namespace);
+      if (typeof params.code !== "string" || !params.code.trim()) {
+        throw new Error("code is required");
+      }
+      runtimePlugins.set(namespace, params.code);
+      return { namespace, loaded: true };
+    }
+
+    case "plugin.unload": {
+      const namespace = requireNamespace(params.namespace);
+      const existed = runtimePlugins.delete(namespace);
+      return { namespace, unloaded: existed };
+    }
+
+    case "plugin.invoke": {
+      const namespace = requireNamespace(params.namespace);
+      const tab = await tabById(params.tabId);
+      const args = Array.isArray(params.args) ? params.args.map(String) : [];
+      const value = await invokePlugin(tab, namespace, args);
+      return { namespace, value };
     }
 
     default:
