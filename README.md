@@ -169,7 +169,12 @@ curl -s http://127.0.0.1:8765/command \
 
 ## Plugins
 
-Plugins let you run your own JS against a tab's page — for sites the built-in commands don't cover (like manipulating a Jupyter notebook's cells). A plugin is a JS file that defines a class named `Plugin`; one instance is created per namespace, per tab's page, so it can keep its own state on `this` across calls. Namespaces keep plugins from clashing with each other or with anything else on the page.
+Plugins let you run your own JS against a tab's page — for sites the built-in commands don't cover. A plugin is a JS file that defines a class named `Plugin`; one instance is created per namespace, per tab's page, so it can keep its own state on `this` across calls. Namespaces keep plugins from clashing with each other or with anything else on the page.
+
+This repo ships two in `plugins/` (auto-loaded on first use):
+
+- **jupyter-notebook** — list, edit, and run cells in a Jupyter Notebook 7 / JupyterLab tab. Writeup: [doc/jupyter-notebook.md](doc/jupyter-notebook.md).
+- **expedia** — search Expedia flights, sort, filter by departure time, and read the offer list. Writeup: [doc/expedia.md](doc/expedia.md).
 
 ```bash
 browser-session-ctl plugin.<namespace> <method> [args...]
