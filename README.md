@@ -144,7 +144,7 @@ Screenshot of a background `--tab` will briefly focus that tab (Chrome can only 
 
 `options` reads every choice on a dropdown from the DOM (`<select>` options, listbox items, custom menus). If the menu is closed and empty, it opens the control and slurps again.
 
-`annotate on` overlays a small status pill in the bottom-right corner of the page showing the last time this tab was controlled, and updates it on every subsequent command. It has three states: **yellow with a bright red border and a pulse** the instant a command fires, settling to **plain yellow** a few seconds later (still under control, just not that instant), and fading to **black** after 2 minutes with no commands at all. While it's on, every command also flashes the tab's favicon to the extension's own icon (a dark lightning bolt on a bright yellow circle) for the same few seconds as the border — both share one timer (`FLASH_MS`, 5s) that resets on every new command, so back-to-back activity keeps them up rather than letting them flicker. `annotate off` removes both. It only works on a normal `http(s)` page already showing content — like the rest of the commands, it refuses a blank or restricted tab (`about:blank`, a fresh new-tab page, `chrome://…`). Both live in the page itself, so navigating or reloading clears them; run `annotate on` again afterward if you want them back.
+`annotate on` overlays a small status pill in the bottom-right corner of the page showing the last time this tab was controlled, and updates it on every subsequent command. It has three states: **yellow with a bright red border and a pulse** the instant a command fires, settling to **plain yellow** a few seconds later (still under control, just not that instant), and fading to **black** after 2 minutes with no commands at all. While it's on, every command also flashes the tab's favicon to the extension's own icon (a dark lightning bolt on a bright yellow circle) for the same few seconds as the border — both share one timer (`FLASH_MS`, 5s) that resets on every new command, so back-to-back activity keeps them up rather than letting them flicker. `annotate off` removes both. It is **per tab**: a reload or in-tab navigation puts the bar back. `open` marks the new tab when `annotate-new-tabs` is on. It only paints on a normal `http(s)` page already showing content — like the rest of the commands, it refuses a blank or restricted tab (`about:blank`, a fresh new-tab page, `chrome://…`).
 
 ```bash
 browser-session-ctl annotate on
@@ -171,10 +171,11 @@ curl -s http://127.0.0.1:8765/command \
 
 Plugins let you run your own JS against a tab's page — for sites the built-in commands don't cover. A plugin is a JS file that defines a class named `Plugin`; one instance is created per namespace, per tab's page, so it can keep its own state on `this` across calls. Namespaces keep plugins from clashing with each other or with anything else on the page.
 
-This repo ships two in `plugins/` (auto-loaded on first use):
+This repo ships these in `plugins/` (auto-loaded on first use):
 
 - **jupyter-notebook** — list, edit, and run cells in a Jupyter Notebook 7 / JupyterLab tab. Writeup: [doc/jupyter-notebook.md](doc/jupyter-notebook.md).
-- **expedia** — search Expedia flights, sort, filter by departure time, and read the offer list. Writeup: [doc/expedia.md](doc/expedia.md).
+- **expedia** — search Expedia flights, sort, filter by departure time, dismiss the stale-price overlay, and read the offer list. Writeup: [doc/expedia.md](doc/expedia.md).
+- **edreams** — search eDreams flights (which includes easyJet, Ryanair, Wizz, …), sort, filter by airline, dismiss the cookie modal, and read the offer list. Writeup: [doc/edreams.md](doc/edreams.md).
 
 ```bash
 browser-session-ctl plugin.<namespace> <method> [args...]

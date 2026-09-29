@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 14;
+  const VERSION = 15;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
@@ -705,4 +705,9 @@
   chrome.runtime.onMessage.addListener(onMessage);
   globalThis.__bscDetach = () => chrome.runtime.onMessage.removeListener(onMessage);
   globalThis.__bscVersion = VERSION;
+
+  chrome.runtime.sendMessage({ type: "annotate-query" }, (response) => {
+    if (chrome.runtime.lastError) return;
+    if (response?.enabled) setAnnotate(true);
+  });
 })();

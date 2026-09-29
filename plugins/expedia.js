@@ -4,7 +4,9 @@
 //   browser-session-ctl --tab <id> plugin.expedia search SEA SFO 2026-10-12
 //   browser-session-ctl --tab <id> plugin.expedia search SEA SFO 2026-10-12 2026-10-19 business 2
 //   browser-session-ctl --tab <id> plugin.expedia sort cheapest
+//   browser-session-ctl --tab <id> plugin.expedia sort earliest
 //   browser-session-ctl --tab <id> plugin.expedia leave evening
+//   browser-session-ctl --tab <id> plugin.expedia refresh
 //   browser-session-ctl --tab <id> plugin.expedia results
 //   browser-session-ctl --tab <id> plugin.expedia select 0
 //   browser-session-ctl --tab <id> plugin.expedia status
@@ -21,15 +23,17 @@ class Plugin {
       methods: {
         help: "Show this message.",
         search:
-          "search <from> <to> <depart> [return] [cabin] [adults] — open Expedia flight results. Airport codes (SEA, SFO). Dates as YYYY-MM-DD or MM/DD/YYYY. Omit return (or pass oneway) for one-way. cabin: economy | premium | business | first. Then call results.",
+          "search <from> <to> <depart> [return] [cabin] [adults] — open Expedia flight results, cheapest first (Price: low to high). Airport codes (SEA, SFO). Dates as YYYY-MM-DD or MM/DD/YYYY. Omit return (or pass oneway) for one-way. cabin: economy | premium | business | first. After the page loads, sort cheapest (default) then results.",
         sort:
-          "sort [cheapest|recommended|duration|latest|earliest] — set the results Sort by control. Default: cheapest (Price: low to high).",
+          "sort [cheapest|expensive|recommended|duration|longest|earliest|latest|earliest-arrival|latest-arrival] — set Sort by. Default: cheapest (Price: low to high). Clicks Refresh search first if the stale-price overlay is up.",
         leave:
-          "leave <early-morning|morning|afternoon|evening> — toggle the left-rail Departure time filter (origin local time). evening is 6:00pm–11:59pm. Repeat to uncheck.",
+          "leave <early-morning|morning|afternoon|evening> — toggle the left-rail Departure time filter (origin local time). evening is 6:00pm–11:59pm. Repeat to uncheck. Clicks Refresh search first if the stale-price overlay is up.",
+        refresh:
+          "refresh — click Expedia's 'Refresh search' dialog if it is covering the results (stale prices). No-op if the overlay is not showing.",
         results:
-          "results — wait for the current tab's flight list and return structured offers (airline, times, price, stops).",
-        select: "select <index> — click one offer from the last results() list (0-based).",
-        status: "status — what this tab is showing: home, results, or other, plus the form values.",
+          "results — dismiss the stale-price overlay if it is up, wait for the flight list, return structured offers in the page's current Sort by order. Does not change sort; use sort for that.",
+        select: "select <index> — click one offer from the current list (0-based). Dismisses the stale-price overlay first. Does not change sort.",
+        status: "status — what this tab is showing: home, results, or other, plus the form values. Dismisses the stale-price overlay first.",
       },
     };
   }
@@ -143,6 +147,8 @@ class Plugin {
     search.set("passengers", `adults:${params.adults},children:0,infantinlap:N`);
     search.set("mode", "search");
     search.set("options", `cabinclass:${params.cabin}`);
+    search.set("sortType", "PRICE");
+    search.set("sortOrder", "INCREASING");
     return `https://www.expedia.com/Flights-Search?${search.toString()}`;
   }
 
@@ -210,8 +216,10 @@ class Plugin {
   parseOffer(el, index) {
     const name = this.offerName(el).replace(/^Cheapest,\s*/i, "");
     const parsed = name.match(
-      /^Select(?: and show fare information for)?\s+(.+?)\s+flight,\s+departing at\s+(\d{1,2}:\d{2}\s*(?:am|pm))(?:\s+from\s+[^,]+)?,?\s+arriving at\s+(\d{1,2}:\d{2}\s*(?:am|pm))(?:\s+in\s+[^,]+)?,?\s+[Pp]riced at\s+(\$[\d,]+)(?:\s+(\w+))?/i
+      /^Select(?: and show fare information for)?\s+(.+?)\s+flight,\s+departing at\s+(\d{1,2}:\d{2}\s*(?:am|pm))(?:\s+from\s+[^,]+)?,?\s+arriving at\s+(\d{1,2}:\d{2}\s*(?:am|pm))(?:\s+in\s+[^,]+)?,?/i
     );
+    const pricedAt = name.match(/[Pp]riced at\s+(\$[\d,]+)/);
+    const extraTotal = name.match(/additional\s+(\$[\d,]+)\s+and total\s+(\$[\d,]+)/i);
     const stops = name.match(/\b(Nonstop|One stop|\d+\s*stops?)\b/i)?.[1] || null;
     const layover = name.match(/Layover for ([^.]+)\./i)?.[1]?.trim() || null;
     const card = el.closest(
@@ -220,14 +228,17 @@ class Plugin {
     const cardText = (card?.innerText || el.innerText || "").replace(/\s+/g, " ").trim();
     const duration = cardText.match(/(\d+h(?:\s*\d+m)?)\s*•/i)?.[1] || null;
     const route = cardText.match(/([A-Za-z .]+ \(\w{3}\))\s*-\s*([A-Za-z .]+ \(\w{3}\))/) || null;
+    const extra = extraTotal?.[1] || null;
+    const trip = name.match(/\b(Roundtrip|One(?:-|\s)?way)\b/i)?.[1] || null;
     const depart = parsed?.[2] || null;
     return {
       index,
       airline: parsed?.[1]?.replace(/^multiple/i, "Multiple ") || null,
       depart,
       arrive: parsed?.[3] || null,
-      price: parsed?.[4] || null,
-      trip: parsed?.[5] || null,
+      price: pricedAt?.[1] || extraTotal?.[2] || null,
+      extra,
+      trip,
       stops,
       layover,
       duration,
@@ -287,20 +298,67 @@ class Plugin {
     );
   }
 
-  async sort(how = "cheapest") {
-    const aliases = {
+  currentSortLabel() {
+    const control = this.sortControl();
+    if (!control) return "";
+    if (control.tagName === "SELECT") {
+      return (control.selectedOptions?.[0]?.textContent || "").trim();
+    }
+    return (control.getAttribute("value") || control.getAttribute("aria-valuetext") || control.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  sortAliases() {
+    return {
       cheapest: "Price: low to high",
       price: "Price: low to high",
       cheap: "Price: low to high",
       "low-to-high": "Price: low to high",
+      "price-low": "Price: low to high",
+      expensive: "Price: high to low",
+      "high-to-low": "Price: high to low",
+      "price-high": "Price: high to low",
       recommended: "Recommended",
       duration: "Shortest duration",
       shortest: "Shortest duration",
-      latest: "Latest departure",
+      "shortest-duration": "Shortest duration",
+      longest: "Longest duration",
+      "longest-duration": "Longest duration",
       earliest: "Earliest departure",
+      "earliest-departure": "Earliest departure",
+      latest: "Latest departure",
+      "latest-departure": "Latest departure",
+      "earliest-arrival": "Earliest arrival",
+      "arrive-early": "Earliest arrival",
+      "latest-arrival": "Latest arrival",
+      "arrive-late": "Latest arrival",
     };
-    const key = String(how || "cheapest").toLowerCase();
-    const label = aliases[key] || how;
+  }
+
+  sortUsage() {
+    return "cheapest, expensive, recommended, duration, longest, earliest, latest, earliest-arrival, latest-arrival";
+  }
+
+  sortLabel(how) {
+    const raw = String(how == null || how === "" ? "cheapest" : how).trim();
+    const key = raw.toLowerCase().replace(/[_\s]+/g, "-");
+    const aliases = this.sortAliases();
+    if (aliases[key]) return aliases[key];
+    const lower = raw.toLowerCase();
+    const labels = [...new Set(Object.values(aliases))];
+    const exact = labels.find((label) => label.toLowerCase() === lower);
+    if (exact) return exact;
+    throw new Error(`Unknown sort "${how}". Use ${this.sortUsage()}.`);
+  }
+
+  sortMatches(label) {
+    const current = this.currentSortLabel().toLowerCase();
+    const wanted = String(label).toLowerCase();
+    return Boolean(current) && (current === wanted || current.includes(wanted));
+  }
+
+  async applySort(label) {
     const control = this.sortControl();
     if (!control) throw new Error('No "Sort by" control on this page');
     control.scrollIntoView({ block: "center", inline: "nearest" });
@@ -310,15 +368,26 @@ class Plugin {
     } else {
       this.fireClick(control);
       await this.sleep(250);
-      const opt = [...document.querySelectorAll('[role="option"], option, li')].find((el) =>
-        el.textContent.trim().toLowerCase().includes(label.toLowerCase())
-      );
+      const opts = [...document.querySelectorAll('[role="option"], option, li')];
+      const wanted = label.toLowerCase();
+      const opt =
+        opts.find((el) => el.textContent.trim().toLowerCase() === wanted) ||
+        opts.find((el) => el.textContent.trim().toLowerCase().includes(wanted));
       if (!opt) throw new Error(`Could not find sort option "${label}"`);
       this.fireClick(opt);
       applied = opt.textContent.trim();
     }
     await this.sleep(600);
     return { sort: applied, count: this.parseOffers().length };
+  }
+
+  async sort(how = "cheapest") {
+    await this.dismissStalePrices();
+    const label = this.sortLabel(how);
+    if (this.sortMatches(label)) {
+      return { sort: this.currentSortLabel() || label, applied: false, count: this.parseOffers().length };
+    }
+    return { ...(await this.applySort(label)), applied: true };
   }
 
   departureTimeRoot() {
@@ -358,6 +427,7 @@ class Plugin {
   }
 
   async leave(when) {
+    await this.dismissStalePrices();
     const el = this.leaveControl(when);
     if (!el) {
       throw new Error(
@@ -401,14 +471,61 @@ class Plugin {
     return Boolean(heading);
   }
 
-  async results() {
+  // Expedia pops "Please refresh your search for the latest prices" over the
+  // results list. Cards behind it are stale — never read or click them.
+  stalePriceRefreshButton() {
+    const buttons = [...document.querySelectorAll("button, [role='button'], a")];
+    return (
+      buttons.find((el) => /^\s*refresh search\s*$/i.test((el.textContent || "").replace(/\s+/g, " ").trim())) || null
+    );
+  }
+
+  hasStalePriceOverlay() {
+    if (this.stalePriceRefreshButton()) return true;
+    return /please refresh your search for the latest prices/i.test(document.body?.innerText || "");
+  }
+
+  async dismissStalePrices() {
+    if (!this.hasStalePriceOverlay()) return { refreshed: false };
+    const btn = this.stalePriceRefreshButton();
+    if (!btn) {
+      throw new Error(
+        'Expedia is showing "Please refresh your search for the latest prices" but no "Refresh search" button was found.'
+      );
+    }
+    this.fireClick(btn);
+    for (let i = 0; i < 25; i += 1) {
+      await this.sleep(400);
+      if (!this.hasStalePriceOverlay()) return { refreshed: true };
+    }
+    throw new Error('Clicked "Refresh search" but the stale-price overlay is still showing.');
+  }
+
+  async refresh() {
+    return this.dismissStalePrices();
+  }
+
+  async results(...extra) {
+    if (extra.length) {
+      throw new Error(
+        `results does not take a sort order. Run plugin.expedia sort cheapest (or ${this.sortUsage()}), then results.`
+      );
+    }
+    const { refreshed } = await this.dismissStalePrices();
     for (let i = 0; i < 12; i += 1) {
+      if (this.hasStalePriceOverlay()) {
+        throw new Error(
+          'Expedia stale-price overlay is showing. Click "Refresh search" (or retry results) before reading offers.'
+        );
+      }
       const flights = this.parseOffers();
       if (flights.length) {
         return {
           url: location.href,
           title: document.title,
           count: flights.length,
+          refreshed,
+          sort: this.currentSortLabel() || null,
           filters: this.filters(),
           flights,
         };
@@ -426,6 +543,7 @@ class Plugin {
   }
 
   async select(index) {
+    await this.dismissStalePrices();
     const i = Number(index);
     if (!Number.isInteger(i) || i < 0) throw new Error(`select <index> needs a 0-based index, got "${index}"`);
     const flights = this.parseOffers();
@@ -435,17 +553,49 @@ class Plugin {
     const buttons = this.offerButtons();
     const el = buttons[i];
     if (!el) throw new Error(`No offer at index ${i} (page has ${buttons.length})`);
+    el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    await this.sleep(150);
+    if (el instanceof HTMLElement) el.focus({ preventScroll: true });
     this.fireClick(el);
-    await this.sleep(300);
-    return { selected: flights[i], url: location.href };
+    if (typeof el.click === "function") el.click();
+    await this.sleep(800);
+    const fare = [...document.querySelectorAll("button, [role='button'], a")].find((b) => {
+      const t = (b.textContent || b.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+      return (
+        /^(continue|select fare|select this fare|reserve)$/i.test(t) ||
+        /^select economy light\b/i.test(t) ||
+        /^select basic( economy)?\b/i.test(t)
+      );
+    });
+    if (fare) {
+      this.fireClick(fare);
+      if (typeof fare.click === "function") fare.click();
+      await this.sleep(1200);
+    }
+    for (let n = 0; n < 20; n += 1) {
+      const heading = [...document.querySelectorAll("h1, h2, h3, [role='heading']")]
+        .map((h) => (h.textContent || "").replace(/\s+/g, " ").trim())
+        .find((t) => /returning flights/i.test(t));
+      if (heading) break;
+      await this.sleep(400);
+    }
+    return {
+      selected: flights[i],
+      url: location.href,
+      title: document.title,
+      returning: /returning flights/i.test(document.body?.innerText || ""),
+    };
   }
 
-  status() {
+  async status() {
+    const { refreshed } = await this.dismissStalePrices();
     const flights = this.parseOffers();
     return {
       url: location.href,
       title: document.title,
       kind: this.pageKind(),
+      staleOverlay: this.hasStalePriceOverlay(),
+      refreshed,
       from: this.fieldValue(/leaving from/i),
       to: this.fieldValue(/going to/i),
       dates: this.buttonName(/^Dates\b/i),

@@ -36,6 +36,44 @@ async function setSetting(key, value) {
   return settings;
 }
 
+// Annotate is per tab, not per document. The bar is painted into the page, so
+// a reload would wipe it unless we remember the tab id and put the bar back.
+const annotateTabIdsMemory = new Set();
+
+async function getAnnotateTabIds() {
+  if (chrome.storage.session) {
+    const { annotateTabIds } = await chrome.storage.session.get({ annotateTabIds: [] });
+    return new Set((annotateTabIds || []).map(Number).filter((id) => Number.isInteger(id)));
+  }
+  return annotateTabIdsMemory;
+}
+
+async function setTabAnnotate(tabId, enabled) {
+  if (chrome.storage.session) {
+    const ids = await getAnnotateTabIds();
+    if (enabled) ids.add(tabId);
+    else ids.delete(tabId);
+    await chrome.storage.session.set({ annotateTabIds: [...ids] });
+    return;
+  }
+  if (enabled) annotateTabIdsMemory.add(tabId);
+  else annotateTabIdsMemory.delete(tabId);
+}
+
+async function tabAnnotateEnabled(tabId) {
+  return (await getAnnotateTabIds()).has(tabId);
+}
+
+async function applyAnnotateIfEnabled(tab) {
+  if (!tab?.id || isRestricted(tab.url) || isBlankTab(tab.url)) return;
+  if (!(await tabAnnotateEnabled(tab.id))) return;
+  try {
+    await sendToPage(tab, { action: "annotate", enabled: true });
+  } catch {
+    // Page script not ready, or the tab went restricted mid-load.
+  }
+}
+
 // Plugins are namespaced JS snippets injected into the page's own JS world at
 // invoke time — the extension never ships any plugin code itself. A
 // namespace only exists once its source has been handed to us over the wire
@@ -240,7 +278,7 @@ async function getTabOrThrow(tabId) {
   }
 }
 
-const PAGE_SCRIPT_VERSION = 14;
+const PAGE_SCRIPT_VERSION = 15;
 
 async function pageScriptVersion(tabId) {
   try {
@@ -490,10 +528,12 @@ async function handleCommand(message) {
       if (!isRestricted(finalTab.url)) {
         const settings = await getSettings();
         if (settings.annotateNewTabs) {
+          await setTabAnnotate(finalTab.id, true);
           try {
             await sendToPage(finalTab, { action: "annotate", enabled: true });
           } catch {
             // Best effort — don't fail the open just because annotate couldn't attach.
+            // The tab stays marked; applyAnnotateIfEnabled will paint after the next load.
           }
         }
       }
@@ -605,9 +645,9 @@ async function handleCommand(message) {
 
     case "page.annotate": {
       const tab = await tabById(params.tabId);
-      return unwrap(
-        await sendToPage(tab, { action: "annotate", enabled: params.enabled !== false })
-      );
+      const enabled = params.enabled !== false;
+      await setTabAnnotate(tab.id, enabled);
+      return unwrap(await sendToPage(tab, { action: "annotate", enabled }));
     }
 
     case "page.debugSetFavicon": {
@@ -681,8 +721,16 @@ async function handleCommand(message) {
   }
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return;
+
+  if (message.type === "annotate-query") {
+    const tabId = sender.tab?.id;
+    (async () => {
+      sendResponse({ enabled: tabId != null && (await tabAnnotateEnabled(tabId)) });
+    })().catch(() => sendResponse({ enabled: false }));
+    return true;
+  }
 
   if (message.type === "popup-status") {
     chrome.storage.local.get(null).then((state) => {
@@ -714,6 +762,15 @@ async function boot() {
   await chrome.storage.local.set({ port });
   connect(`ws://127.0.0.1:${port}/extension`);
 }
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  setTabAnnotate(tabId, false).catch(() => {});
+});
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status !== "complete") return;
+  applyAnnotateIfEnabled(tab || { id: tabId, url: info.url });
+});
 
 chrome.runtime.onInstalled.addListener(boot);
 chrome.runtime.onStartup.addListener(boot);

@@ -1,0 +1,14 @@
+---
+description: After Expedia search, sort cheapest before reading results
+alwaysApply: true
+---
+
+# Expedia: cheapest after search
+
+`plugin.expedia results` only reads the list. It does not change **Sort by**.
+
+After every `search`, wait for the results page, then `plugin.expedia sort cheapest`, then `results`. That is the default. Expedia often ignores the cheap-price URL and shows Recommended until you `sort`.
+
+Only `sort earliest` / `duration` / etc. when the user asked for that order. Then `results` again.
+
+For a time-of-day window, `leave morning` / `evening` / etc., then `results`. That filters; it does not reorder.
