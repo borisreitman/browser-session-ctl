@@ -32,7 +32,17 @@ class Plugin {
           "refresh — click Expedia's 'Refresh search' dialog if it is covering the results (stale prices). No-op if the overlay is not showing.",
         results:
           "results — dismiss the stale-price overlay if it is up, wait for the flight list, return structured offers in the page's current Sort by order. Does not change sort; use sort for that.",
-        select: "select <index> — click one offer from the current list (0-based). Dismisses the stale-price overlay first. Does not change sort.",
+        select:
+          "select <index|text...> [fare] — click one offer (0-based index, or words matched against the offer label, e.g. select \"8:10pm air canada\"), then choose a fare (default: cheapest, e.g. Basic; or name one: select 3 Standard). Waits for the fare sheet and the next stage. Does not change sort.",
+        open: "open <index|text...> — click one offer and return the fare sheet (fares) without choosing one.",
+        fares: "fares — list fares in the open fare sheet (name, price).",
+        fare: "fare <name> — click a fare in the open fare sheet (Basic, Standard, Flex, Comfort, ...). Waits for the next stage (returning flights or trip details).",
+        more: "more [max] — click 'Show More Flights' until the list stops growing (or max clicks, default 10). Then results returns the longer list.",
+        facets: "facets — list every left-rail checkbox filter: group, label, checked.",
+        facet: "facet <group> <label> [on|off] — set a left-rail checkbox filter by substring, e.g. facet stops nonstop on; facet airlines swiss on; facet layover zurich off. Omit on|off to toggle.",
+        stops: "stops <nonstop|1|2> [on|off] — sugar for facet stops.",
+        airline: "airline <name> [on|off] — sugar for facet airlines.",
+        arrive: "arrive <early-morning|morning|afternoon|evening> — toggle Arrival time bucket (destination local time), if the left rail has one.",
         status: "status — what this tab is showing: home, results, or other, plus the form values. Dismisses the stale-price overlay first.",
       },
     };
@@ -542,49 +552,191 @@ class Plugin {
     throw new Error("Timed out waiting for Expedia flight results to render.");
   }
 
-  async select(index) {
-    await this.dismissStalePrices();
-    const i = Number(index);
-    if (!Number.isInteger(i) || i < 0) throw new Error(`select <index> needs a 0-based index, got "${index}"`);
-    const flights = this.parseOffers();
-    if (!flights.length) {
-      throw new Error("No flight offers on this page. Run plugin.expedia results first.");
-    }
-    const buttons = this.offerButtons();
-    const el = buttons[i];
-    if (!el) throw new Error(`No offer at index ${i} (page has ${buttons.length})`);
-    el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
-    await this.sleep(150);
-    if (el instanceof HTMLElement) el.focus({ preventScroll: true });
-    this.fireClick(el);
-    if (typeof el.click === "function") el.click();
-    await this.sleep(800);
-    const fare = [...document.querySelectorAll("button, [role='button'], a")].find((b) => {
-      const t = (b.textContent || b.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
-      return (
-        /^(continue|select fare|select this fare|reserve)$/i.test(t) ||
-        /^select economy light\b/i.test(t) ||
-        /^select basic( economy)?\b/i.test(t)
+  // ---- left-rail checkbox filters (stops, airlines, layover airport, ...) ----
+  groupOf(input) {
+    let node = input.parentElement;
+    for (let i = 0; node && i < 8; i += 1, node = node.parentElement) {
+      const h = [...node.querySelectorAll("legend, h2, h3, h4, [role='heading']")].find(
+        (x) => !x.closest("label") && !x.contains(input)
       );
-    });
-    if (fare) {
-      this.fireClick(fare);
-      if (typeof fare.click === "function") fare.click();
-      await this.sleep(1200);
+      if (h) return (h.textContent || "").replace(/\s+/g, " ").trim();
     }
-    for (let n = 0; n < 20; n += 1) {
-      const heading = [...document.querySelectorAll("h1, h2, h3, [role='heading']")]
-        .map((h) => (h.textContent || "").replace(/\s+/g, " ").trim())
-        .find((t) => /returning flights/i.test(t));
-      if (heading) break;
+    return "";
+  }
+
+  facetInputs() {
+    return [...document.querySelectorAll("input[type='checkbox']")].map((input) => {
+      const label = input.closest("label") || (input.id && document.querySelector(`label[for="${input.id}"]`));
+      const text = ((label && label.textContent) || input.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+      return { input, label: text, group: this.groupOf(input), checked: input.checked };
+    });
+  }
+
+  facets() {
+    return {
+      facets: this.facetInputs().map((f) => ({ group: f.group, label: f.label, checked: f.checked })),
+    };
+  }
+
+  async facet(group, label, state) {
+    if (!group || !label) throw new Error("facet <group> <label> [on|off]");
+    await this.dismissStalePrices();
+    const g = String(group).toLowerCase();
+    const l = String(label).toLowerCase();
+    const hit = this.facetInputs().filter((f) => f.group.toLowerCase().includes(g) && f.label.toLowerCase().includes(l));
+    if (!hit.length) throw new Error(`No filter checkbox matches group "${group}" label "${label}". Run facets.`);
+    if (hit.length > 1) {
+      throw new Error(`Ambiguous: ${hit.map((f) => `${f.group}/${f.label}`).join(" | ")}. Be more specific.`);
+    }
+    const want = state === undefined ? !hit[0].checked : /^(on|true|1|yes)$/i.test(String(state));
+    if (hit[0].checked !== want) {
+      hit[0].input.scrollIntoView({ block: "center", behavior: "instant" });
+      const target = hit[0].input.closest("label") || hit[0].input;
+      this.fireClick(target);
+      if (hit[0].input.checked !== want && typeof hit[0].input.click === "function") hit[0].input.click();
+      await this.settle();
+    }
+    const key = (t) => t.replace(/\s*\(\d+\).*$/, "");
+    const after = this.facetInputs().find((f) => f.group === hit[0].group && key(f.label) === key(hit[0].label));
+    return { group: hit[0].group, label: hit[0].label, checked: after ? after.checked : null };
+  }
+
+  // Wait until the offer list stops changing (filters re-render the list async).
+  async settle() {
+    await this.sleep(800);
+    let last = "";
+    let stable = 0;
+    for (let i = 0; i < 30 && stable < 3; i += 1) {
+      const sig = this.offerButtons().map((el) => this.offerName(el)).join("|") + (this.hasStalePriceOverlay() ? "!" : "");
+      stable = sig === last ? stable + 1 : 0;
+      last = sig;
       await this.sleep(400);
     }
+  }
+
+  stops(which, state) {
+    const w = String(which || "").toLowerCase();
+    const label = /^(0|non)/.test(w) ? "nonstop" : /^1/.test(w) ? "1 stop" : /^2/.test(w) ? "2+" : w;
+    return this.facet("stop", label, state);
+  }
+
+  airline(name, state) {
+    return this.facet("airline", name, state);
+  }
+
+  arrive(when) {
+    const w = String(when || "").toLowerCase().replace(/[ _]/g, "-");
+    const map = { "early-morning": "early morning", morning: "morning", afternoon: "afternoon", evening: "evening", night: "evening" };
+    if (!map[w]) throw new Error("arrive <early-morning|morning|afternoon|evening>");
+    return this.facet("arrival", map[w]);
+  }
+
+  // ---- longer list ----
+  async more(max) {
+    const limit = Number(max) || 10;
+    let clicks = 0;
+    for (; clicks < limit; clicks += 1) {
+      const btn = [...document.querySelectorAll("button")].find((b) => /^show more( flights)?$/i.test((b.textContent || "").replace(/\s+/g, " ").trim()));
+      if (!btn) break;
+      const before = this.offerButtons().length;
+      btn.scrollIntoView({ block: "center", behavior: "instant" });
+      this.fireClick(btn);
+      let grew = false;
+      for (let i = 0; i < 15; i += 1) {
+        await this.sleep(400);
+        if (this.offerButtons().length > before) {
+          grew = true;
+          break;
+        }
+      }
+      if (!grew) break;
+    }
+    return { clicks, count: this.offerButtons().length };
+  }
+
+  // ---- offer -> fare sheet -> next stage ----
+  fareButtons() {
+    return [...document.querySelectorAll("button, [role='button']")]
+      .map((el) => {
+        const t = (el.getAttribute("aria-label") || el.textContent || "").replace(/\s+/g, " ").trim();
+        const m = t.match(/^Select (.+?) for (\$[\d,]+(?:\.\d+)?)/i);
+        return m ? { el, name: m[1], price: m[2] } : null;
+      })
+      .filter(Boolean);
+  }
+
+  resolveOffer(which, flights) {
+    const asInt = Number(which);
+    if (String(which).trim() !== "" && Number.isInteger(asInt) && asInt >= 0 && String(asInt) === String(which).trim()) {
+      if (!flights[asInt]) throw new Error(`No offer at index ${asInt} (page has ${flights.length})`);
+      return asInt;
+    }
+    const words = String(which).toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) throw new Error("select/open needs an index or words to match");
+    const hits = flights.filter((f) => words.every((w) => f.label.toLowerCase().includes(w)));
+    if (!hits.length) throw new Error(`No offer matches "${which}". Run more/results.`);
+    if (hits.length > 1) {
+      throw new Error(`"${which}" matches ${hits.length} offers (indexes ${hits.map((f) => f.index).join(", ")}). Add words or use an index.`);
+    }
+    return hits[0].index;
+  }
+
+  async open(...which) {
+    await this.dismissStalePrices();
+    const flights = this.parseOffers();
+    if (!flights.length) throw new Error("No flight offers on this page. Run plugin.expedia results first.");
+    const i = this.resolveOffer(which.join(" "), flights);
+    const el = this.offerButtons()[i];
+    el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    await this.sleep(150);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (el instanceof HTMLElement) el.focus({ preventScroll: true });
+      this.fireClick(el);
+      if (typeof el.click === "function") el.click();
+      for (let n = 0; n < 10; n += 1) {
+        await this.sleep(400);
+        if (this.fareButtons().length || /returning flights/i.test(document.body?.innerText || "")) {
+          return { selected: flights[i], fares: this.fareButtons().map((f) => ({ name: f.name, price: f.price })) };
+        }
+      }
+    }
+    return { selected: flights[i], fares: [] };
+  }
+
+  fares() {
+    return { fares: this.fareButtons().map((f) => ({ name: f.name, price: f.price })) };
+  }
+
+  async fare(name) {
+    const buttons = this.fareButtons();
+    if (!buttons.length) throw new Error("No fare sheet is open. Run open <index> first.");
+    const want = String(name || "").toLowerCase();
+    const hit = want ? buttons.find((b) => b.name.toLowerCase() === want) || buttons.find((b) => b.name.toLowerCase().includes(want)) : buttons[0];
+    if (!hit) throw new Error(`No fare "${name}". Available: ${buttons.map((b) => `${b.name} ${b.price}`).join(", ")}`);
+    hit.el.scrollIntoView({ block: "center", behavior: "instant" });
+    this.fireClick(hit.el);
+    if (typeof hit.el.click === "function") hit.el.click();
+    for (let n = 0; n < 25; n += 1) {
+      await this.sleep(400);
+      if (/returning flights/i.test(document.body?.innerText || "") || !this.fareButtons().length) break;
+    }
+    await this.sleep(600);
     return {
-      selected: flights[i],
+      fare: { name: hit.name, price: hit.price },
       url: location.href,
       title: document.title,
       returning: /returning flights/i.test(document.body?.innerText || ""),
     };
+  }
+
+  async select(which, fareName) {
+    if (which === undefined) throw new Error("select <index|text...> [fare]");
+    const opened = await this.open(which);
+    if (!opened.fares.length) {
+      return { ...opened, url: location.href, title: document.title, returning: /returning flights/i.test(document.body?.innerText || "") };
+    }
+    const picked = await this.fare(fareName);
+    return { selected: opened.selected, ...picked };
   }
 
   async status() {

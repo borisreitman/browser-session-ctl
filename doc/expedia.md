@@ -41,7 +41,14 @@ For two nested roundtrips (long-haul plus a side hop), run **two searches**, usu
 | `leave <early-morning\|morning\|afternoon\|evening>` | Toggle a **Departure time** checkbox on the left rail (origin local time). Repeat to uncheck. Clicks **Refresh search** first if that dialog is up. |
 | `refresh` | Click **Refresh search** on Expedia's stale-price overlay. No-op if it is not showing. |
 | `results` | Wait for offer cards and return them in the current **Sort by** order. Does not change sort. Clicks **Refresh search** first if that dialog is up. |
-| `select <index>` | Click one offer from the current list (0-based). Clicks **Refresh search** first if that dialog is up. |
+| `select <index\|text> [fare]` | Click one offer (0-based index, or words matched against the offer label, e.g. `select "8:10pm air canada"`), wait for the fare sheet, pick a fare (default: cheapest listed; or name one such as `Basic`, `Standard`), and wait for the next stage. |
+| `open <index\|text>` | Click one offer and return the fare sheet without choosing a fare. |
+| `fares` | List the fares in the open fare sheet (name, price). |
+| `fare [name]` | Click a fare in the open sheet (default: first/cheapest). Waits for **Returning flights**. |
+| `more [max]` | Click **Show More Flights** until the list stops growing (default up to 10 clicks). `results` then returns the longer list. |
+| `facets` | List every left-rail checkbox: group, label, checked. |
+| `facet <group> <label> [on\|off]` | Set a left-rail checkbox by substring, e.g. `facet airlines swiss on`, `facet layover zurich off`. Waits for the list to settle. |
+| `stops <nonstop\|1\|2> [on\|off]` / `airline <name> [on\|off]` / `arrive <bucket>` | Sugar over `facet` (stops, airlines, arrival-time bucket). |
 | `status` | `home` / `results` / `other`, plus Leaving from / Going to / Dates / Travelers when those fields are on the page. Clicks **Refresh search** first if that dialog is up. |
 
 ### `search`
