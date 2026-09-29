@@ -176,6 +176,7 @@ This repo ships these in `plugins/` (auto-loaded on first use):
 - **jupyter-notebook** — list, edit, and run cells in a Jupyter Notebook 7 / JupyterLab tab. Writeup: [doc/jupyter-notebook.md](doc/jupyter-notebook.md).
 - **expedia** — search Expedia flights, sort, filter by departure time, dismiss the stale-price overlay, and read the offer list. Writeup: [doc/expedia.md](doc/expedia.md).
 - **edreams** — search eDreams flights (which includes easyJet, Ryanair, Wizz, …), sort, filter by airline, dismiss the cookie modal, and read the offer list. Writeup: [doc/edreams.md](doc/edreams.md).
+- **easyjet** — search easyjet.com flights by filling its homepage form, read the flight tiles, and follow partner routes to Connections by easyJet. Writeup: [doc/easyjet.md](doc/easyjet.md).
 
 ```bash
 browser-session-ctl plugin.<namespace> <method> [args...]
