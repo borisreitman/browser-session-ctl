@@ -169,15 +169,21 @@ curl -s http://127.0.0.1:8765/command \
 
 ## Plugins
 
-Plugins let you run your own JS against a tab's page — for sites the built-in commands don't cover. A plugin is a JS file that defines a class named `Plugin`; one instance is created per namespace, per tab's page, so it can keep its own state on `this` across calls. Namespaces keep plugins from clashing with each other or with anything else on the page.
+Plugins let you run your own JS against a tab's page — for sites the built-in commands don't cover. A plugin is a JS file that defines a class named `Plugin`. There are two operations; neither requires reloading the extension when **plugin** source changes (reload only when you change `extension/` itself: manifest, background, content). Writeup: [doc/plugins.md](doc/plugins.md).
 
-This repo ships these in `plugins/` (auto-loaded on first use):
+**runtime-load** (`plugin-load`) — persist the source in the extension. After that, every current and future tab has the namespace until `plugin-unload`. First `plugin.<namespace> …` for a file in this repo's `plugins/` does this for you.
+
+**inject-load** (`plugin-inject`, and every `plugin.<namespace> …`) — read the file on disk, replace the same stored source (tabs inherit the new bytes), rewrite `extension/runtime-plugins/<namespace>.js`, and inject it into the tab you are driving. A load or inject **taints** every tab so the next use gets a new instance. Edit the plugin, run a command (or `plugin-inject`); no extension reload.
+
+This repo ships these in `plugins/` (auto runtime-loaded on first use, inject-loaded on every command):
 
 - **jupyter-notebook** — list, edit, and run cells in a Jupyter Notebook 7 / JupyterLab tab. Writeup: [doc/jupyter-notebook.md](doc/jupyter-notebook.md).
 - **expedia** — search Expedia flights, sort, filter by departure time, dismiss the stale-price overlay, and read the offer list. Writeup: [doc/expedia.md](doc/expedia.md).
 - **edreams** — search eDreams flights (which includes easyJet, Ryanair, Wizz, …), sort, filter by airline, dismiss the cookie modal, and read the offer list. Writeup: [doc/edreams.md](doc/edreams.md).
 - **easyjet** — search easyjet.com flights by filling its homepage form, read the flight tiles, and follow partner routes to Connections by easyJet. Writeup: [doc/easyjet.md](doc/easyjet.md).
 - **allegiant** — search allegiantair.com directly (Allegiant is not on Expedia/eDreams), then read departing/returning flights. Writeup: [doc/allegiant.md](doc/allegiant.md).
+- **google-flights** — search Google Flights, sort cheapest/best/fastest, and read the departing-flight list. Writeup: [doc/google-flights.md](doc/google-flights.md).
+- **ryanair** — search Ryanair (`/trip/flights/select`), read outbound/return cards, pick a day or fare. Writeup: [doc/ryanair.md](doc/ryanair.md).
 
 ```bash
 browser-session-ctl plugin.<namespace> <method> [args...]
@@ -199,37 +205,38 @@ browser-session-ctl plugin.jupyter-notebook
 # falls back to that plugin's help() if it has one
 ```
 
-**The extension itself never ships any plugin code.** A namespace only exists once its source has been handed to the extension at runtime via `plugin.load` — it's kept in the service worker's memory, never written to disk inside the extension. This repo ships some plugins as plain source files in `plugins/` (outside `extension/` entirely, so they're never part of the packaged/loaded extension), and the CLI bridges the two: the first time you invoke a namespace the extension doesn't already have loaded, it transparently reads the matching `plugins/<namespace>.js` file and loads it for you.
+**The extension git tree never ships plugin logic.** A namespace exists in the extension once it has been runtime-loaded — stored in extension local storage. This repo ships plugins as plain source in `plugins/` (outside `extension/` entirely). The CLI bridges the two: the first `plugin.<namespace> …` runtime-loads `plugins/<namespace>.js` if the extension does not already have it, then inject-loads that file into the tab. Later commands inject-load again from disk (so edits apply) and do not need another `plugin-load`.
 
 ```bash
 browser-session-ctl plugin.jupyter-notebook cells
-# extension doesn't know "jupyter-notebook" yet, so the CLI reads
-# plugins/jupyter-notebook.js and plugin.load's it first, then invokes
+# first time: runtime-load from plugins/jupyter-notebook.js, then inject-load and invoke
+# later: inject-load from disk and invoke — no chrome://extensions reload
 ```
 
-You can also load your own plugin from any local file — it does not need to live in this repo at all, and (since it's loaded explicitly) it always takes priority over a same-named file in `plugins/`:
+You can also runtime-load your own file — it does not need to live in this repo, and it takes priority over a same-named file in `plugins/`:
 
 ```bash
 browser-session-ctl plugin-load my-thing ./my-thing.js
 browser-session-ctl plugin.my-thing foo bar
+browser-session-ctl plugin-inject my-thing ./my-thing.js   # probing: push the edited file into this tab
 browser-session-ctl plugin-unload my-thing
 browser-session-ctl plugin-list
 ```
 
-`plugin-load <namespace> <file.js>` reads that file's contents on your machine and hands the source to the extension, which keeps it in memory keyed by namespace. Re-running `plugin-load` for a namespace you already loaded replaces it: the next invocation gets a fresh `Plugin` instance built from the new code. `plugin-list` shows both what the extension currently has loaded (`loaded`) and what's available to auto-load from this repo's `plugins/` dir (`inRepo`); `plugin-unload <namespace>` drops a loaded one.
-
-Loaded plugin source lives only in the service worker's memory, so it (and any state a plugin instance was holding) disappears whenever the service worker restarts: an extension reload, a browser restart, or Chrome evicting an idle worker. Just invoke it again afterward — for a repo plugin the CLI reloads it automatically; for your own file, run `plugin-load` again.
+`plugin-load <namespace> <file.js>` is runtime-load: store the source on the extension so every tab inherits it. Re-running it replaces that stored source. `plugin-inject <namespace> [file.js]` updates the **same** stored source from disk, then injects into this tab (file defaults to `plugins/<namespace>.js`). `plugin-list` shows `loaded` (extension-level) and `inRepo`. `plugin-unload` drops the persisted namespace.
 
 `doc/hello-world-plugin.js` is a minimal runnable example:
 
 ```bash
 browser-session-ctl plugin-load hello doc/hello-world-plugin.js
 browser-session-ctl plugin.hello greet Boris
-# { "namespace": "hello", "value": { "message": "Hello, Boris!", "calls": 1, ... } }
+# edit the file, then either of:
+browser-session-ctl plugin-inject hello doc/hello-world-plugin.js
+browser-session-ctl plugin.hello greet Boris
 browser-session-ctl plugin-unload hello
 ```
 
-It runs in the page's own JS world (`document`, `window`, and any of the page's own globals are all in scope, just like a snippet pasted into DevTools' console on that tab), and whatever a method returns becomes the CLI's JSON result — it must be structured-cloneable (plain objects/arrays/primitives, no DOM nodes or functions).
+It runs against the page DOM (`document` is in scope; the page's own JS globals are not, unless the page's CSP allows a MAIN-world fallback). Whatever a method returns becomes the CLI's JSON result — it must be structured-cloneable (plain objects/arrays/primitives, no DOM nodes or functions). Per-page instance state resets when that document unloads (a navigation or reload). The plugin *source* stays loaded.
 
 ## Debug commands
 

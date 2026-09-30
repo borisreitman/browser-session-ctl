@@ -22,6 +22,8 @@ class Plugin {
         help: "Show this message.",
         search:
           "search <from> <to> <depart> [return] [adults] — fill the allegiantair.com homepage form and press Search. Airport codes (BLI, LAS). Dates as YYYY-MM-DD or MM/DD/YYYY. Omit return (or pass oneway) for one-way. If the tab is not on the homepage it navigates there first; run search again. Allegiant does not fly every day; a date with no departure is not clickable.",
+        destinations:
+          "destinations <from> — pick the origin and list every airport Allegiant sells from it (the To menu only fills in after From is chosen).",
         results:
           "results — wait for the Select Flights list and return departing (and returning) flights: number, times, price, seats. Also the nearby-day tabs (price or No Flights).",
         day: "day <departing|returning> <YYYY-MM-DD> — click a date tab on the results page (use next/previous if it is off-screen). Then results.",
@@ -270,6 +272,22 @@ class Plugin {
     );
   }
 
+  // The To menu does not open on a click of the wrapper; ArrowDown on the
+  // (enabled) input does. It stays disabled until From is chosen, and it lists
+  // only the airports Allegiant sells from that origin.
+  openMenu(input) {
+    input.focus();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", keyCode: 40, bubbles: true }));
+  }
+
+  menuOptions() {
+    return this.airportOptions().filter((el) => /^react-select-(origin|destination)-option-/.test(el.id || ""));
+  }
+
+  menuLabels() {
+    return [...new Set(this.menuOptions().map((el) => this.clean(el.textContent)))];
+  }
+
   async pickAirport(which, code) {
     const hook = which === "to" ? "flight-search-destination" : "flight-search-origin";
     const inputId = which === "to" ? "select-destination" : "select-origin";
@@ -287,11 +305,24 @@ class Plugin {
     let opt = null;
     for (let i = 0; i < 15 && !opt; i += 1) {
       await this.sleep(200);
-      opt = this.airportOptions().find((el) => (el.textContent || "").includes(want));
+      opt = this.menuOptions().find((el) => (el.textContent || "").includes(want));
     }
     if (!opt) {
+      // Open the full menu (ArrowDown) and scan it: typing a code does not
+      // always filter the way the label reads.
+      this.setInput(input, "");
+      this.openMenu(input);
+      for (let i = 0; i < 15 && !opt; i += 1) {
+        await this.sleep(250);
+        opt = this.menuOptions().find((el) => (el.textContent || "").includes(want));
+      }
+    }
+    if (!opt) {
+      const offered = this.menuLabels();
       throw new Error(
-        `Allegiant has no airport ${code} in the ${which} list (it only sells its own routes). Try a hub such as LAS, SFB, PIE, AZA, BLI.`
+        which === "to"
+          ? `Allegiant does not sell ${code} from the chosen origin. Airports offered: ${offered.join("; ") || "none listed"}.`
+          : `Allegiant has no airport ${code} in the From list.`
       );
     }
     await this.tap(opt);
@@ -301,6 +332,29 @@ class Plugin {
       throw new Error(`Picking ${code} as ${which} did not stick (hidden field is "${hidden.value || ""}")`);
     }
     return this.clean(opt.textContent);
+  }
+
+  // destinations <from> — pick the origin, open the To menu, and return every
+  // airport Allegiant offers from there (the list only fills after From is set).
+  async destinations(from) {
+    if (!this.hasForm()) {
+      setTimeout(() => location.assign("https://www.allegiantair.com/"), 50);
+      return { navigating: true, next: "wait for the homepage to load, then run destinations again" };
+    }
+    await this.ready();
+    const code = this.airport(from);
+    await this.pickAirport("from", code);
+    const input = document.getElementById("select-destination");
+    if (!input) throw new Error("No destination airport field on this page");
+    if (input.disabled) throw new Error("The destination field is still disabled after picking From.");
+    this.setInput(input, "");
+    this.openMenu(input);
+    let labels = [];
+    for (let i = 0; i < 20 && !labels.length; i += 1) {
+      await this.sleep(250);
+      labels = this.menuLabels();
+    }
+    return { from: code, count: labels.length, destinations: labels };
   }
 
   async setTripType(roundtrip) {

@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>eDreams results fixture</title></head>
+<body>
+<!--
+  Captured 2026-09-29 from https://www.edreams.com/travel/#results/type=R;dep=2026-10-20;from=LGW;to=LCA;ret=2026-10-27
+  Structure kept, chrome stripped: itinerary-list wrappers have no test id;
+  [data-testid=itinerary] is nested; waiting-message stays in the DOM at 0×0
+  with Prime copy after results paint.
+-->
+<div data-testid="waiting-message-default-logo" style="display:flex;opacity:0;width:0;height:0;overflow:hidden"></div>
+<div data-testid="waiting-message" style="display:block;opacity:0;width:0;height:0;overflow:hidden">
+  Save up to €100s per year on your flights, hotels and car rentalsAdd Prime to your booking to get our lowest prices. No surprises. Try FREE for 15 days for first time subscribers.
+</div>
+
+<div id="consent">
+  <button type="button" id="continue-without">Continue without agreeing</button>
+  <button type="button">Agree &amp; Close</button>
+</div>
+
+<div role="tablist">
+  <div data-testid="sorting-tab-recommended" role="tab" aria-selected="true">Best 4h 50' - € 739</div>
+  <div data-testid="sorting-tab-cheapest" role="tab" aria-selected="false">Cheapest 22h 48' - € 328</div>
+  <div data-testid="sorting-tab-fastest" role="tab" aria-selected="false">Fastest 4h 50' - € 739</div>
+</div>
+
+<p>25 of 457 flights match these filters</p>
+<label><input type="checkbox" data-testid="only-direct-flights-checkbox"> Direct flights</label>
+<label><input type="checkbox" data-testid="carrier_checkbox_BA" value="BA" checked> British Airways</label>
+<label><input type="checkbox" data-testid="carrier_checkbox_U2" value="U2" checked> Easyjet</label>
+<label><input type="checkbox" data-testid="carrier_checkbox_EC" value="EC" checked> EasyJet Europe</label>
+<label><input type="checkbox" data-testid="carrier_checkbox_A3" value="A3" checked> Aegean Airlines</label>
+
+<div data-testid="itinerary-list">
+  <div data-testid="decoupling-tracking"></div>
+  <div>
+    <div data-testid="itinerary">
+      <div data-testid="itinerary-header">Genius deal!</div>
+      <div data-testid="itinerary-details">
+        <div>DEPARTURE · British Airways</div>
+        <div>Hand luggage</div>
+        <div>11:35 4h 40' Direct 18:15 LGW London, Gatwick ... LCA Larnaca, Larnaca...</div>
+        <div>RETURN · British Airways</div>
+        <div>Hand luggage</div>
+        <div>16:40 5h 00' Direct 19:40 LCA Larnaca, Larnaca... LGW London, Gatwick ...</div>
+      </div>
+      <button type="button" id="ba-plain">Non-discounted Price € 817 fare per passenger</button>
+      <button type="button">Discounted Price € 817 € 739 Prime fare per passenger</button>
+    </div>
+  </div>
+  <div>
+    <div data-testid="itinerary">
+      <div data-testid="itinerary-details">
+        <div>DEPARTURE · Easyjet</div>
+        <div>1 personal item</div>
+        <div>15:10 4h 40' Direct 21:50 LGW London, Gatwick ... LCA Larnaca, Larnaca...</div>
+        <div>RETURN · Easyjet</div>
+        <div>1 personal item</div>
+        <div>16:40 4h 40' Direct 19:20 LCA Larnaca, Larnaca... LGW London, Gatwick ...</div>
+      </div>
+      <button type="button">Non-discounted Price € 901 fare per passenger</button>
+      <button type="button">Discounted Price € 901 € 820 Prime fare per passenger</button>
+    </div>
+  </div>
+  <div>
+    <div data-testid="itinerary">
+      <div data-testid="itinerary-details">
+        <div>DEPARTURE · Multiple airlines1 personal item18:1014h 20'1 stop10:30+1LGW London, Gatwick ...LCA Larnaca, Larnaca...</div>
+        <div>RETURN · Multiple airlines1 personal item14:058h 55'1 stop21:00LCA Larnaca, Larnaca...LGW London, Gatwick ...</div>
+      </div>
+      <button type="button">Non-discounted Price€ 424fare per passenger</button>
+      <button type="button">Discounted Price€ 424€ 362Prime fare per passenger</button>
+    </div>
+  </div>
+  <!-- Fallback row: DEPARTURE text, no itinerary test id (older / unpainted wrapper). -->
+  <div>
+    <div>DEPARTURE · Vueling 1 personal item 06:50 2h 20' Direct 10:10 LGW London, Gatwick ... BCN Barcelona, El Pr...</div>
+    <div>RETURN · Vueling 1 personal item 12:00 2h 20' Direct 13:20 BCN Barcelona, El Pr... LGW London, Gatwick ...</div>
+    <button type="button">Price € 99 fare per passenger</button>
+  </div>
+</div>
+<div id="picked"></div>
+<script>
+  document.getElementById("continue-without").addEventListener("click", () => {
+    document.getElementById("consent").remove();
+  });
+  document.querySelectorAll("[data-testid^='sorting-tab-']").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll("[data-testid^='sorting-tab-']").forEach((t) => t.setAttribute("aria-selected", "false"));
+      tab.setAttribute("aria-selected", "true");
+    });
+  });
+  document.getElementById("ba-plain").addEventListener("click", () => {
+    document.getElementById("picked").textContent = "selected-non-discounted";
+  });
+</script>
+</body>
+</html>

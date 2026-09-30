@@ -1,0 +1,43 @@
+<!doctype html>
+<html data-edreams-wait-ms="4000">
+<head><meta charset="utf-8"><title>eDreams deferred paint fixture</title></head>
+<body>
+<!--
+  Replays the failure mode: "0 of N flights match" and a waiting widget show
+  before any [data-testid=itinerary] is mounted in itinerary-list. The old
+  plugin aborted on the counter; this page paints a nested card after 900ms.
+-->
+<div data-testid="waiting-message-default-logo" id="wait-logo" style="display:flex;width:40px;height:40px">logo</div>
+<div data-testid="waiting-message" id="wait-msg">Searching for flights...</div>
+<p id="matching">0 of 457 flights match these filters</p>
+<div role="tablist">
+  <div data-testid="sorting-tab-cheapest" role="tab" aria-selected="true">Cheapest</div>
+</div>
+<div data-testid="itinerary-list" id="list">
+  <div data-testid="decoupling-tracking"></div>
+  <div></div>
+</div>
+<script>
+  setTimeout(() => {
+    document.getElementById("wait-logo").style.cssText = "display:none";
+    document.getElementById("wait-msg").style.cssText = "display:none";
+    document.getElementById("matching").textContent = "25 of 457 flights match these filters";
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+      <div data-testid="itinerary">
+        <div data-testid="itinerary-details">
+          <div>DEPARTURE · British Airways</div>
+          <div>Hand luggage</div>
+          <div>11:35 4h 40' Direct 18:15 LGW London, Gatwick ... LCA Larnaca, Larnaca...</div>
+          <div>RETURN · British Airways</div>
+          <div>Hand luggage</div>
+          <div>16:40 5h 00' Direct 19:40 LCA Larnaca, Larnaca... LGW London, Gatwick ...</div>
+        </div>
+        <button type="button">Non-discounted Price € 817 fare per passenger</button>
+        <button type="button">Discounted Price € 817 € 739 Prime fare per passenger</button>
+      </div>`;
+    document.getElementById("list").appendChild(wrap);
+  }, 900);
+</script>
+</body>
+</html>

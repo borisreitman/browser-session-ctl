@@ -74,15 +74,16 @@ async function applyAnnotateIfEnabled(tab) {
   }
 }
 
-// Plugins are namespaced JS snippets injected into the page's own JS world at
-// invoke time — the extension never ships any plugin code itself. A
-// namespace only exists once its source has been handed to us over the wire
-// via plugin.load (the CLI's plugin-load command, or a `plugin.<namespace>`
-// invocation that auto-loads one of the repo's plugins/*.js files — see
-// sidecar/cli.mjs). Sources live only in this Map, so they — and any
-// per-page state they left behind on window.__bscPluginState — vanish
-// whenever the service worker restarts (extension reload, browser restart).
+// runtime-load (plugin.load): persist source once on the extension so every
+// current and future tab inherits that namespace until plugin.unload.
+//
+// inject-load (plugin.inject, and plugin.invoke): rewrite
+// extension/runtime-plugins/<ns>.js from disk, update that same stored
+// source (tabs inherit the new bytes), and inject the file into the tab
+// you are driving. Changing plugin source does not require reloading the
+// extension; changing this file / content.js / the manifest still does.
 const runtimePlugins = new Map(); // namespace -> source code
+const pluginEpochs = new Map(); // namespace -> generation; bumped on every load/inject push
 
 const NAMESPACE_RE = /^[a-z0-9][a-z0-9-]*$/i;
 
@@ -95,58 +96,270 @@ function requireNamespace(namespace) {
   return namespace;
 }
 
+const pluginsReady = restorePlugins();
+
+async function restorePlugins() {
+  const { runtimePlugins: stored, pluginEpochs: storedEpochs } = await chrome.storage.local.get({
+    runtimePlugins: {},
+    pluginEpochs: {},
+  });
+  runtimePlugins.clear();
+  pluginEpochs.clear();
+  for (const [ns, code] of Object.entries(stored || {})) {
+    if (typeof ns === "string" && NAMESPACE_RE.test(ns) && typeof code === "string" && code.trim()) {
+      runtimePlugins.set(ns, code);
+    }
+  }
+  for (const [ns, epoch] of Object.entries(storedEpochs || {})) {
+    if (runtimePlugins.has(ns) && Number.isFinite(epoch) && epoch > 0) {
+      pluginEpochs.set(ns, epoch);
+    }
+  }
+}
+
+async function savePlugins() {
+  await chrome.storage.local.set({
+    runtimePlugins: Object.fromEntries(runtimePlugins),
+    pluginEpochs: Object.fromEntries(pluginEpochs),
+  });
+}
+
+function pluginEpoch(namespace) {
+  return pluginEpochs.get(namespace) || 0;
+}
+
+function bumpPluginEpoch(namespace) {
+  const epoch = pluginEpoch(namespace) + 1;
+  pluginEpochs.set(namespace, epoch);
+  return epoch;
+}
+
+function pluginsPayload() {
+  return { plugins: pluginsObject(), epochs: Object.fromEntries(pluginEpochs) };
+}
+
+async function persistPlugin(namespace, code) {
+  runtimePlugins.set(namespace, code);
+  const epoch = bumpPluginEpoch(namespace);
+  await savePlugins();
+  await broadcastPlugins({ action: "taint", namespace, code, epoch });
+}
+
 function pluginSource(namespace) {
   if (runtimePlugins.has(namespace)) return runtimePlugins.get(namespace);
   throw new Error(`Unknown plugin namespace "${namespace}". Load it first with plugin.load.`);
 }
 
-async function invokePlugin(tab, namespace, args) {
-  requireNamespace(namespace);
-  const code = pluginSource(namespace);
+function pluginsObject() {
+  return Object.fromEntries(runtimePlugins);
+}
+
+async function runPluginInPage(namespace, code, action, rest, epoch) {
+  try {
+    window.__bscPluginState = window.__bscPluginState || {};
+    const slot = (window.__bscPluginState[namespace] ||= {});
+    epoch = epoch || 0;
+    if (
+      !slot.instance ||
+      slot.tainted ||
+      slot.source !== code ||
+      slot.instanceEpoch !== epoch
+    ) {
+      const PluginClass = new Function(`"use strict";\n${code}\n;return Plugin;`)();
+      if (typeof PluginClass !== "function") {
+        throw new Error('Plugin file must define a class named "Plugin".');
+      }
+      slot.instance = new PluginClass();
+      slot.source = code;
+      slot.tainted = false;
+      slot.instanceEpoch = epoch;
+    }
+    const resolvedAction = action || (typeof slot.instance.help === "function" ? "help" : null);
+    if (!resolvedAction) {
+      throw new Error(
+        `A method name is required, e.g. plugin.${namespace} <method> [args...]. This plugin has no help() to fall back to.`
+      );
+    }
+    const method = slot.instance[resolvedAction];
+    if (typeof method !== "function") {
+      throw new Error(`Plugin "${namespace}" has no method "${resolvedAction}"`);
+    }
+    const value = await method.apply(slot.instance, resolvedAction === action ? rest : []);
+    return { ok: true, value: value === undefined ? null : value };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function isCompileBlocked(error) {
+  return /Trusted Type|unsafe-eval|EvalError|Content Security Policy|dynamically imported module|Failed to fetch/i.test(
+    String(error || "")
+  );
+}
+
+class RuntimePluginFileError extends Error {}
+
+function resolvePluginCode(namespace, liveCode) {
+  if (typeof liveCode === "string" && liveCode.trim()) return liveCode;
+  return pluginSource(namespace);
+}
+
+async function runPluginFromInjectedFile(namespace, code, action, rest, epoch) {
+  try {
+    window.__bscPluginState = window.__bscPluginState || {};
+    const slot = (window.__bscPluginState[namespace] ||= {});
+    const PluginClass = globalThis.__bscPluginExports?.[namespace];
+    if (typeof PluginClass !== "function") {
+      throw new Error(`Unknown plugin namespace "${namespace}". Runtime-load it with plugin-load, or inject-load first.`);
+    }
+    epoch = epoch || 0;
+    if (
+      !slot.instance ||
+      slot.tainted ||
+      slot.source !== code ||
+      slot.instanceEpoch !== epoch
+    ) {
+      slot.instance = new PluginClass();
+      slot.source = code;
+      slot.tainted = false;
+      slot.instanceEpoch = epoch;
+    }
+    const resolvedAction = action || (typeof slot.instance.help === "function" ? "help" : null);
+    if (!resolvedAction) {
+      throw new Error(
+        `A method name is required, e.g. plugin.${namespace} <method> [args...]. This plugin has no help() to fall back to.`
+      );
+    }
+    const method = slot.instance[resolvedAction];
+    if (typeof method !== "function") {
+      throw new Error(`Plugin "${namespace}" has no method "${resolvedAction}"`);
+    }
+    const value = await method.apply(slot.instance, resolvedAction === action ? rest : []);
+    return { ok: true, value: value === undefined ? null : value };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function bindInjectedPlugin(namespace, code, epoch) {
+  try {
+    window.__bscPluginState = window.__bscPluginState || {};
+    const slot = (window.__bscPluginState[namespace] ||= {});
+    const PluginClass = globalThis.__bscPluginExports?.[namespace];
+    if (typeof PluginClass !== "function") {
+      throw new Error(`Unknown plugin namespace "${namespace}". Runtime-load it with plugin-load, or inject-load first.`);
+    }
+    slot.instance = new PluginClass();
+    slot.source = code;
+    slot.tainted = false;
+    slot.instanceEpoch = epoch || 0;
+    return { ok: true, value: { namespace, injected: true } };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function injectPluginFile(tab, namespace) {
+  await inject(tab.id);
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "ISOLATED",
+      files: [`runtime-plugins/${namespace}.js`],
+    });
+  } catch (err) {
+    throw new RuntimePluginFileError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function invokePluginFromFile(tab, namespace, args, code) {
+  const [action, ...rest] = args;
+  await injectPluginFile(tab, namespace);
+  const [injection] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "ISOLATED",
+    args: [namespace, code, action ?? null, rest, pluginEpoch(namespace)],
+    func: runPluginFromInjectedFile,
+  });
+  const payload = injection?.result;
+  if (!payload?.ok) throw new Error(payload?.error || "Plugin failed with no error message");
+  sendToPage(tab, { action: "touch" }).catch(() => {});
+  return payload.value;
+}
+
+async function injectLoadPlugin(tab, namespace, code) {
+  await injectPluginFile(tab, namespace);
+  const [injection] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "ISOLATED",
+    args: [namespace, code, pluginEpoch(namespace)],
+    func: bindInjectedPlugin,
+  });
+  const payload = injection?.result;
+  if (!payload?.ok) throw new Error(payload?.error || "Plugin inject-load failed");
+  sendToPage(tab, { action: "touch" }).catch(() => {});
+  return payload.value;
+}
+
+async function invokePluginInMain(tab, namespace, args, code) {
   const [action, ...rest] = args;
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     world: "MAIN",
-    args: [namespace, code, action ?? null, rest],
-    func: async (namespace, code, action, rest) => {
-      try {
-        // Each plugin file defines a class named `Plugin`. One instance per
-        // namespace is kept on window.__bscPluginState so the plugin can
-        // hold its own state across calls on `this` — until the page
-        // reloads or the source changes, at which point we make a fresh
-        // instance.
-        window.__bscPluginState = window.__bscPluginState || {};
-        const slot = (window.__bscPluginState[namespace] ||= {});
-        if (!slot.instance || slot.source !== code) {
-          const PluginClass = new Function(`"use strict";\n${code}\n;return Plugin;`)();
-          if (typeof PluginClass !== "function") {
-            throw new Error('Plugin file must define a class named "Plugin".');
-          }
-          slot.instance = new PluginClass();
-          slot.source = code;
-        }
-        // No method given: fall back to the plugin's own `help()` if it has
-        // one, so `plugin.<namespace>` alone is a usable "what can this do".
-        const resolvedAction = action || (typeof slot.instance.help === "function" ? "help" : null);
-        if (!resolvedAction) {
-          throw new Error(
-            `A method name is required, e.g. plugin.${namespace} <method> [args...]. This plugin has no help() to fall back to.`
-          );
-        }
-        const method = slot.instance[resolvedAction];
-        if (typeof method !== "function") {
-          throw new Error(`Plugin "${namespace}" has no method "${resolvedAction}"`);
-        }
-        const value = await method.apply(slot.instance, resolvedAction === action ? rest : []);
-        return { ok: true, value: value === undefined ? null : value };
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
-      }
-    },
+    args: [namespace, code, action ?? null, rest, pluginEpoch(namespace)],
+    func: runPluginInPage,
   });
   const payload = injection?.result;
   if (!payload?.ok) throw new Error(payload?.error || "Plugin failed with no error message");
   return payload.value;
+}
+
+async function pushPluginMessage(tab, payload) {
+  if (!tab?.id || isRestricted(tab.url) || isBlankTab(tab.url)) return;
+  try {
+    await inject(tab.id);
+    await chrome.tabs.sendMessage(tab.id, {
+      source: "browser-session-ctl-plugin",
+      ...payload,
+    });
+  } catch {
+    // Tab has no content script yet, or went restricted mid-flight.
+  }
+}
+
+async function broadcastPlugins(payload) {
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(tabs.map((tab) => pushPluginMessage(tab, payload)));
+}
+
+async function invokePlugin(tab, namespace, args, liveCode) {
+  await pluginsReady;
+  requireNamespace(namespace);
+  const code = resolvePluginCode(namespace, liveCode);
+  const [action, ...rest] = args;
+  try {
+    return await invokePluginFromFile(tab, namespace, args, code);
+  } catch (err) {
+    if (!(err instanceof RuntimePluginFileError)) throw err;
+  }
+  try {
+    return unwrap(
+      await sendToPage(tab, {
+        action: "plugin",
+        namespace,
+        code,
+        method: action ?? null,
+        args: rest,
+        epoch: pluginEpoch(namespace),
+      })
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (isCompileBlocked(message) || /Unknown plugin namespace/.test(message)) {
+      return invokePluginInMain(tab, namespace, args, code);
+    }
+    throw err;
+  }
 }
 
 async function setStatus(partial) {
@@ -278,7 +491,7 @@ async function getTabOrThrow(tabId) {
   }
 }
 
-const PAGE_SCRIPT_VERSION = 15;
+const PAGE_SCRIPT_VERSION = 23;
 
 async function pageScriptVersion(tabId) {
   try {
@@ -690,21 +903,29 @@ async function handleCommand(message) {
     }
 
     case "plugin.list": {
+      await pluginsReady;
       return { loaded: [...runtimePlugins.keys()] };
     }
 
     case "plugin.load": {
+      await pluginsReady;
       const namespace = requireNamespace(params.namespace);
       if (typeof params.code !== "string" || !params.code.trim()) {
         throw new Error("code is required");
       }
-      runtimePlugins.set(namespace, params.code);
+      await persistPlugin(namespace, params.code);
       return { namespace, loaded: true };
     }
 
     case "plugin.unload": {
+      await pluginsReady;
       const namespace = requireNamespace(params.namespace);
       const existed = runtimePlugins.delete(namespace);
+      pluginEpochs.delete(namespace);
+      if (existed) {
+        await savePlugins();
+        await broadcastPlugins({ action: "uninstall", namespace });
+      }
       return { namespace, unloaded: existed };
     }
 
@@ -712,8 +933,19 @@ async function handleCommand(message) {
       const namespace = requireNamespace(params.namespace);
       const tab = await tabById(params.tabId);
       const args = Array.isArray(params.args) ? params.args.map(String) : [];
-      const value = await invokePlugin(tab, namespace, args);
+      const value = await invokePlugin(tab, namespace, args, params.code);
       return { namespace, value };
+    }
+
+    case "plugin.inject": {
+      await pluginsReady;
+      const namespace = requireNamespace(params.namespace);
+      if (typeof params.code !== "string" || !params.code.trim()) {
+        throw new Error("code is required");
+      }
+      await persistPlugin(namespace, params.code);
+      const tab = await tabById(params.tabId);
+      return await injectLoadPlugin(tab, namespace, params.code);
     }
 
     default:
@@ -723,6 +955,14 @@ async function handleCommand(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return;
+
+  if (message.type === "plugin-query") {
+    (async () => {
+      await pluginsReady;
+      sendResponse(pluginsPayload());
+    })().catch(() => sendResponse({ plugins: {} }));
+    return true;
+  }
 
   if (message.type === "annotate-query") {
     const tabId = sender.tab?.id;
@@ -758,6 +998,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function boot() {
+  await pluginsReady;
   const port = await getPort();
   await chrome.storage.local.set({ port });
   connect(`ws://127.0.0.1:${port}/extension`);
@@ -770,6 +1011,15 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status !== "complete") return;
   applyAnnotateIfEnabled(tab || { id: tabId, url: info.url });
+  pluginsReady
+    .then(() => {
+      if (!runtimePlugins.size) return;
+      return pushPluginMessage(tab || { id: tabId, url: info.url }, {
+        action: "install-all",
+        ...pluginsPayload(),
+      });
+    })
+    .catch(() => {});
 });
 
 chrome.runtime.onInstalled.addListener(boot);

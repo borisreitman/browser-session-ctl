@@ -1,16 +1,17 @@
 // Example plugin: extension/plugins/ or your own file, either works.
 //
-// Load it as a runtime plugin (no repo changes needed):
+// Runtime-load once (persist on every tab), then invoke. Edit the file and
+// inject-load without reloading the extension:
 //   browser-session-ctl plugin-load hello doc/hello-world-plugin.js
 //   browser-session-ctl plugin.hello greet
+//   browser-session-ctl plugin-inject hello doc/hello-world-plugin.js
 //   browser-session-ctl plugin.hello greet Boris
 //   browser-session-ctl plugin-unload hello
 //
 // Every plugin file must define a class named exactly `Plugin`. One
-// instance is created per namespace on the target tab's own page (world:
-// "MAIN"), so `this` is a fine place to keep state between calls, and
-// `document`/`window` are the page's own — same as pasting code into that
-// tab's DevTools console.
+// instance is created per namespace on each tab (content-script world:
+// page DOM, not the page's own JS globals). Load the namespace once;
+// it is then available on every current and future tab until unload.
 class Plugin {
   constructor() {
     this.calls = 0;

@@ -15,6 +15,7 @@ browser-session-ctl --tab <id> plugin.allegiant select departing 0
 
 | method | what it does |
 | --- | --- |
+| `destinations <from>` | pick the origin and list every airport Allegiant sells from it |
 | `results` | departing / returning rows: flight number, times, `period` (morning/afternoon/evening), price, seats; plus the nearby-day tabs |
 | `day <departing\|returning> <YYYY-MM-DD>` | click a date tab (Allegiant often flies only a few days a week) |
 | `select <departing\|returning> <index\|flight>` | click one row; does not book |
@@ -27,3 +28,5 @@ browser-session-ctl --tab <id> plugin.allegiant select departing 0
 - Dates with no departure are disabled in the calendar and listed as **No Flights** on the results tabs. That is the airline's schedule, not a plugin failure.
 - `period` is from the departure clock: morning before noon, afternoon until 6pm, evening after 6pm.
 - Cookie banners and the credit-card ice-pop are dismissed automatically before `search`, `results`, `day`, `select`, and `status` (and again before each click). You do not call `close`. The ice-pop **X** is used, never Apply.
+- **Origin drives destination.** The To field is disabled until From is chosen, and its menu lists only the airports Allegiant currently sells from that origin (BLI today: Las Vegas `LAS` and Mesa/Phoenix `AZA`). The menu does not open on a click; the plugin opens it with ArrowDown on the input. Typing a code is tried first; if nothing matches, `search` scans the whole menu and the error lists the airports actually offered. Use `destinations <from>` to see them.
+- BLI appears twice in the From list with reversed city order ("Bellingham, WA / Vancouver, BC" and "Vancouver, BC / Bellingham, WA"); the plugin picks the first match.

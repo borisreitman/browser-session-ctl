@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 15;
+  const VERSION = 23;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
@@ -621,6 +621,90 @@
     return { ref, value: fieldValue(el) };
   }
 
+  async function compilePluginClass(code) {
+    const source = `${code}\nexport default Plugin;\n`;
+    const blobUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    try {
+      const mod = await import(blobUrl);
+      if (typeof mod.default !== "function") {
+        throw new Error('Plugin file must define a class named "Plugin".');
+      }
+      return mod.default;
+    } catch (blobErr) {
+      const dataUrl = `data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`;
+      try {
+        const mod = await import(dataUrl);
+        if (typeof mod.default !== "function") {
+          throw new Error('Plugin file must define a class named "Plugin".');
+        }
+        return mod.default;
+      } catch {
+        throw blobErr;
+      }
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+  }
+
+  function taintPlugin(namespace, epoch) {
+    globalThis.__bscPluginState = globalThis.__bscPluginState || {};
+    const slot = (globalThis.__bscPluginState[namespace] ||= {});
+    delete slot.instance;
+    slot.tainted = true;
+    if (epoch != null) slot.epoch = epoch;
+  }
+
+  async function installPlugin(namespace, code, epoch) {
+    if (!namespace || typeof code !== "string" || !code.trim()) return;
+    taintPlugin(namespace, epoch);
+    const slot = globalThis.__bscPluginState[namespace];
+    const PluginClass = await compilePluginClass(code);
+    slot.instance = new PluginClass();
+    slot.source = code;
+    slot.tainted = false;
+    slot.instanceEpoch = epoch || 0;
+  }
+
+  function dropPlugin(namespace) {
+    if (globalThis.__bscPluginState && namespace) delete globalThis.__bscPluginState[namespace];
+  }
+
+  async function installAll(plugins, epochs) {
+    for (const [ns, code] of Object.entries(plugins || {})) {
+      try {
+        await installPlugin(ns, code, epochs?.[ns]);
+      } catch {
+        // One bad plugin must not block the rest. Instance stays tainted.
+      }
+    }
+  }
+
+  async function runPlugin(namespace, code, method, rest, epoch) {
+    const slot = globalThis.__bscPluginState?.[namespace];
+    const stale =
+      !slot?.instance ||
+      slot.tainted ||
+      (code && slot.source !== code) ||
+      (epoch != null && slot.instanceEpoch !== epoch);
+    if (code && stale) await installPlugin(namespace, code, epoch);
+    const ready = globalThis.__bscPluginState?.[namespace];
+    if (!ready?.instance) {
+      throw new Error(`Unknown plugin namespace "${namespace}". Load it first with plugin.load.`);
+    }
+    const resolved = method || (typeof ready.instance.help === "function" ? "help" : null);
+    if (!resolved) {
+      throw new Error(
+        `A method name is required, e.g. plugin.${namespace} <method> [args...]. This plugin has no help() to fall back to.`
+      );
+    }
+    const fn = ready.instance[resolved];
+    if (typeof fn !== "function") {
+      throw new Error(`Plugin "${namespace}" has no method "${resolved}"`);
+    }
+    const value = await fn.apply(ready.instance, resolved === method ? rest : []);
+    return value === undefined ? null : value;
+  }
+
   function press(key) {
     const target = document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -638,8 +722,62 @@
     return { y: window.scrollY };
   }
 
+  function onPluginSync(message, sendResponse) {
+    const reply = (work) => {
+      Promise.resolve()
+        .then(work)
+        .then((result) => sendResponse({ ok: true, result }))
+        .catch((err) =>
+          sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) })
+        );
+    };
+    switch (message.action) {
+      case "taint":
+        reply(async () => {
+          taintPlugin(message.namespace, message.epoch);
+          if (message.code) {
+            try {
+              await installPlugin(message.namespace, message.code, message.epoch);
+            } catch {
+              // Compile can fail on a strict CSP page; the slot stays tainted
+              // so the next invoke builds a new instance from the injected file.
+            }
+          }
+          return { namespace: message.namespace, epoch: message.epoch };
+        });
+        break;
+      case "install":
+        reply(async () => {
+          await installPlugin(message.namespace, message.code, message.epoch);
+          return { namespace: message.namespace };
+        });
+        break;
+      case "uninstall":
+        reply(() => {
+          dropPlugin(message.namespace);
+          return { namespace: message.namespace };
+        });
+        break;
+      case "install-all":
+        reply(async () => {
+          await installAll(message.plugins, message.epochs);
+          return { count: Object.keys(message.plugins || {}).length };
+        });
+        break;
+      default:
+        reply(() => {
+          throw new Error(`Unknown plugin sync action: ${message.action}`);
+        });
+    }
+  }
+
   function onMessage(message, _sender, sendResponse) {
-    if (!message || message.source !== "browser-session-ctl-v3") return;
+    if (!message) return;
+    if (message.source === "browser-session-ctl-plugin") {
+      onPluginSync(message, sendResponse);
+      return true;
+    }
+    if (message.source !== "browser-session-ctl-v3") return;
     lastControlledAt = Date.now();
     renderAnnotateBar();
     markAnnotateActive();
@@ -694,6 +832,20 @@
           )
         );
         break;
+      case "plugin":
+        reply(() =>
+          runPlugin(
+            message.namespace,
+            message.code,
+            message.method ?? null,
+            message.args || [],
+            message.epoch
+          )
+        );
+        break;
+      case "touch":
+        reply(() => null);
+        break;
       default:
         reply(() => {
           throw new Error(`Unknown page action: ${message.action}`);
@@ -709,5 +861,10 @@
   chrome.runtime.sendMessage({ type: "annotate-query" }, (response) => {
     if (chrome.runtime.lastError) return;
     if (response?.enabled) setAnnotate(true);
+  });
+
+  chrome.runtime.sendMessage({ type: "plugin-query" }, (response) => {
+    if (chrome.runtime.lastError) return;
+    if (response?.plugins) installAll(response.plugins, response.epochs).catch(() => {});
   });
 })();

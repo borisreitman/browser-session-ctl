@@ -6,6 +6,8 @@ Always **snapshot, act, snapshot again**. Refs (`e1`, `e2`, …) are viewport-on
 
 Use `--tab <id>` whenever `chrome://extensions` or another window might be focused. `tabs` lists ids.
 
+Site-specific plugins (`plugin.expedia`, `plugin.google-flights`, `plugin.ryanair`, …) are documented in [plugins.md](plugins.md) (runtime-load vs inject-load) and in each `doc/<namespace>.md`.
+
 ```bash
 browser-session-ctl tabs
 browser-session-ctl snapshot --tab 123456789

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { writeFile, readFile, readdir } from "node:fs/promises";
+import { writeFile, readFile, readdir, mkdir, unlink } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { origin } from "./config.mjs";
@@ -8,6 +8,9 @@ import { origin } from "./config.mjs";
 // handed to it at runtime via plugin.load. See PLUGINS_DIR below and
 // plugin.<namespace>'s auto-load fallback.
 const PLUGINS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "plugins");
+const EXTENSION_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "extension");
+const RUNTIME_PLUGINS_DIR = join(EXTENSION_DIR, "runtime-plugins");
+const NAMESPACE_RE = /^[a-z0-9][a-z0-9-]*$/i;
 
 const USAGE = `Drive a Chrome tab from the shell.
 
@@ -42,6 +45,7 @@ Usage:
   browser-session-ctl plugin.<namespace> [args...]
   browser-session-ctl plugin-list
   browser-session-ctl plugin-load <namespace> <file.js>
+  browser-session-ctl plugin-inject <namespace> [file.js]
   browser-session-ctl plugin-unload <namespace>
 
 --tab <id>  Override the default and use this tab instead.
@@ -67,6 +71,7 @@ Examples:
   browser-session-ctl plugin.jupyter-notebook cells
   browser-session-ctl plugin-list
   browser-session-ctl plugin-load my-thing ./my-thing.js
+  browser-session-ctl plugin-inject my-thing ./my-thing.js
   browser-session-ctl plugin.my-thing foo bar
   browser-session-ctl plugin-unload my-thing
 `;
@@ -132,29 +137,96 @@ function printResult(result) {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-// The extension itself never ships plugin code — a namespace only exists in
-// its runtime plugin map once something has plugin.load'd it. This repo
-// ships plugins/*.js as source you can read, not as part of the extension
-// package; the CLI is what bridges the two, loading a matching repo file on
-// first use so `plugin.<namespace>` still works without an explicit
-// plugin-load. A namespace loaded by hand (or from your own file, elsewhere
-// on disk) always takes priority, since we only fall back to this when the
-// extension reports the namespace as unknown.
-async function invokePluginAutoLoad(namespace, args, tabId) {
+// Two plugin operations:
+//
+// runtime-load (`plugin-load`): persist source in the extension so every
+// current and future tab has the namespace until plugin-unload.
+//
+// inject-load (`plugin-inject`, and every `plugin.<ns> …`): rewrite
+// extension/runtime-plugins/<ns>.js from the current file on disk, replace
+// the same stored source (tabs inherit), and inject into this tab. Edit the
+// plugin, run a command — no chrome://extensions reload. The extension's
+// own files (background, content, manifest) still need a reload when *they*
+// change.
+
+function requireNamespace(namespace) {
+  if (!namespace || !NAMESPACE_RE.test(namespace)) {
+    throw new Error(
+      `Invalid plugin namespace "${namespace}". Use letters, digits, and dashes, e.g. "jupyter-notebook".`
+    );
+  }
+  return namespace;
+}
+
+function sourceHash(code) {
+  let hash = 2166136261;
+  for (let i = 0; i < code.length; i += 1) {
+    hash ^= code.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function wrapRuntimePlugin(namespace, code) {
+  return `"use strict";
+// inject-load ${sourceHash(code)}
+globalThis.__bscPluginExports = globalThis.__bscPluginExports || {};
+(function () {
+${code}
+  if (typeof Plugin !== "function") {
+    throw new Error('Plugin file must define a class named "Plugin".');
+  }
+  globalThis.__bscPluginExports[${JSON.stringify(namespace)}] = Plugin;
+})();
+`;
+}
+
+async function writeRuntimePlugin(namespace, code) {
+  requireNamespace(namespace);
+  await mkdir(RUNTIME_PLUGINS_DIR, { recursive: true });
+  await writeFile(join(RUNTIME_PLUGINS_DIR, `${namespace}.js`), wrapRuntimePlugin(namespace, code), "utf8");
+}
+
+async function removeRuntimePlugin(namespace) {
   try {
-    return await command("plugin.invoke", withTab({ namespace, args }, tabId));
+    requireNamespace(namespace);
+    await unlink(join(RUNTIME_PLUGINS_DIR, `${namespace}.js`));
+  } catch {
+    // File was never written, or already gone.
+  }
+}
+
+async function repoPluginCode(namespace) {
+  try {
+    return await readFile(join(PLUGINS_DIR, `${namespace}.js`), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+async function resolvePluginFile(namespace, filePath) {
+  requireNamespace(namespace);
+  if (filePath) return readFile(filePath, "utf8");
+  const repoCode = await repoPluginCode(namespace);
+  if (repoCode) return repoCode;
+  throw new Error(
+    `No file given and plugins/${namespace}.js is missing. usage: plugin-inject <namespace> [file.js]`
+  );
+}
+
+async function invokePluginAutoLoad(namespace, args, tabId) {
+  const repoCode = await repoPluginCode(namespace);
+  if (repoCode) await writeRuntimePlugin(namespace, repoCode);
+  const invokeParams = withTab({ namespace, args, ...(repoCode ? { code: repoCode } : {}) }, tabId);
+  try {
+    return await command("plugin.invoke", invokeParams);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (!/^Unknown plugin namespace/.test(message)) throw err;
-    const path = join(PLUGINS_DIR, `${namespace}.js`);
-    let code;
-    try {
-      code = await readFile(path, "utf8");
-    } catch {
-      throw err; // no repo plugin by that name either — surface the original error
-    }
-    await command("plugin.load", { namespace, code });
-    return await command("plugin.invoke", withTab({ namespace, args }, tabId));
+    if (!repoCode) throw err;
+    await writeRuntimePlugin(namespace, repoCode);
+    await command("plugin.load", { namespace, code: repoCode });
+    return await command("plugin.invoke", invokeParams);
   }
 }
 
@@ -338,13 +410,23 @@ async function main(argv) {
       const [namespace, filePath] = rest;
       if (!namespace || !filePath) throw new Error("usage: plugin-load <namespace> <file.js>");
       const code = await readFile(filePath, "utf8");
+      await writeRuntimePlugin(namespace, code);
       printResult(await command("plugin.load", { namespace, code }));
+      return;
+    }
+    case "plugin-inject": {
+      const [namespace, filePath] = rest;
+      if (!namespace) throw new Error("usage: plugin-inject <namespace> [file.js]");
+      const code = await resolvePluginFile(namespace, filePath);
+      await writeRuntimePlugin(namespace, code);
+      printResult(await command("plugin.inject", withTab({ namespace, code }, tabId)));
       return;
     }
     case "plugin-unload": {
       const namespace = rest[0];
       if (!namespace) throw new Error("usage: plugin-unload <namespace>");
       printResult(await command("plugin.unload", { namespace }));
+      await removeRuntimePlugin(namespace);
       return;
     }
     default:

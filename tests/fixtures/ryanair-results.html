@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Ryanair results fixture</title></head>
+<body>
+<!--
+  Captured 2026-09-29 from
+  https://www.ryanair.com/gb/en/trip/flights/select?...originIata=STN&destinationIata=BGY&dateOut=2026-10-20&dateIn=2026-10-27
+  Structure kept, chrome stripped: flight-card custom elements, date tabs, cookie banner.
+-->
+<button type="button" id="no-thanks">No, thanks</button>
+<button type="button">Yes, I agree</button>
+
+<h2>London Stansted to Milan Bergamo</h2>
+<button type="button">Sort flights by</button>
+<button type="button">18Oct Sunday £ 57 . 89</button>
+<button type="button">20Oct Tuesday £ 33 . 19</button>
+<flight-card>
+  <flight-card class="nested-shell">
+    <div>Ryanair 05:55 London Stansted FR 2738 1h 55m 08:50 Milan Bergamo Basic Fare £39.49</div>
+    <button type="button">Select</button>
+  </flight-card>
+</flight-card>
+<flight-card>
+  <div>Ryanair 19:25 London Stansted FR 3674 1h 55m 22:20 Milan Bergamo Basic Fare £33.19</div>
+  <button type="button">Select</button>
+</flight-card>
+<flight-card>
+  <div>Operated by Malta Air 22:00 London Stansted FR 2734 1h 55m 00:55 Milan Bergamo Basic Fare £33.30</div>
+  <button type="button">Select</button>
+</flight-card>
+
+<h2>Milan Bergamo to London Stansted</h2>
+<button type="button">Sort flights by</button>
+<button type="button">27Oct Tuesday £ 15 . 09</button>
+<flight-card>
+  <div>Operated by Malta Air 06:15 Milan Bergamo FR 2739 2h 5m 07:20 London Stansted Basic Fare £15.09</div>
+  <button type="button">Select</button>
+</flight-card>
+<flight-card>
+  <div>Ryanair 17:05 Milan Bergamo FR 2735 2h 5m 18:10 London Stansted Basic Fare £28.69 2 seats left at this price</div>
+  <button type="button" id="ret-select">Select</button>
+</flight-card>
+<div id="picked"></div>
+<script>
+  document.getElementById("no-thanks").addEventListener("click", () => {
+    document.getElementById("no-thanks").remove();
+  });
+  document.getElementById("ret-select").addEventListener("click", () => {
+    document.getElementById("picked").textContent = "selected-fr2735";
+  });
+</script>
+</body>
+</html>

@@ -32,7 +32,7 @@ class Plugin {
         direct: "direct — toggle the 'Direct flights' checkbox.",
         results: "results — wait for the itinerary cards, return them in the page's current sort order. Does not change sort.",
         select: "select <index> — click the price button of one itinerary (0-based). Does not change sort.",
-        close: "close — dismiss the cookie-consent modal (Continue without agreeing). No-op if not showing. Every other method that touches the page does this first.",
+        close: "close — dismiss the cookie-consent modal (Continue without agreeing) and the Prime 'I understand' overlay. No-op if neither is showing. Every other method that touches the page does this first.",
         status: "status — what this tab is showing (home, results, other), sort, and result count.",
       },
     };
@@ -132,29 +132,35 @@ class Plugin {
     return { ...params, url };
   }
 
-  // eDreams covers the page with a cookie-consent modal. Never accept on the
-  // user's behalf: take "Continue without agreeing" and only fall back to
-  // closing the dialog if that link is missing.
+  // Overlays that sit on top of the results list. Never click "Agree".
+  overlayButton() {
+    const re = /^(continue without agreeing|i understand)$/i;
+    const nodes = document.querySelectorAll("a, button, [role='button']");
+    for (const el of nodes) {
+      if (re.test(this.clean(el.textContent))) return el;
+    }
+    return null;
+  }
+
   consentButton() {
-    const els = [...document.querySelectorAll("a, button, [role='button']")];
-    const named = (re) => els.find((el) => re.test(this.clean(el.textContent)));
-    return named(/^continue without agreeing/i) || null;
+    return this.overlayButton();
   }
 
   hasConsentModal() {
-    return Boolean(this.consentButton());
+    return Boolean(this.overlayButton());
   }
 
   async dismissConsent() {
-    const btn = this.consentButton();
+    const btn = this.overlayButton();
     if (!btn) return { consent: false };
     this.fireClick(btn);
     if (typeof btn.click === "function") btn.click();
-    for (let i = 0; i < 15; i += 1) {
-      await this.sleep(300);
+    for (let i = 0; i < 10; i += 1) {
+      await this.sleep(200);
       if (!this.hasConsentModal()) return { consent: true };
     }
-    throw new Error('Clicked "Continue without agreeing" but the cookie modal is still showing.');
+    // Prime "I understand" sometimes stays in the DOM but is inert; keep going.
+    return { consent: true, overlayStuck: true };
   }
 
   async close() {
@@ -162,7 +168,114 @@ class Plugin {
   }
 
   itineraries() {
-    return [...document.querySelectorAll("[data-testid='itinerary']")];
+    const byTestId = [...document.querySelectorAll("[data-testid='itinerary']")];
+    const seen = new Set(byTestId);
+    const extra = [];
+    // Newer results UI virtualizes into [data-testid='itinerary-list'].
+    // Painted rows often nest the itinerary test id inside a wrapper that
+    // itself has none; unpainted wrappers have no DEPARTURE text yet.
+    const list = document.querySelector("[data-testid='itinerary-list']");
+    if (list) {
+      for (const el of list.querySelectorAll("[data-testid='itinerary']")) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          extra.push(el);
+        }
+      }
+      for (const el of list.children) {
+        if (seen.has(el) || el.querySelector("[data-testid='itinerary']")) continue;
+        if (/DEPARTURE|RETURN/.test(el.innerText || "")) extra.push(el);
+      }
+    }
+    return byTestId.concat(extra);
+  }
+
+  isDisplayed(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    const st = getComputedStyle(el);
+    return st.display !== "none" && st.visibility !== "hidden" && Number(st.opacity) !== 0;
+  }
+
+  // True while the waiting page / spinner is actually on screen. The waiting
+  // widget stays in the DOM after results with Prime copy, so presence alone
+  // is not a loading signal.
+  resultsPending() {
+    const sels = [
+      "[data-testid='waiting-page']",
+      "[data-testid='waiting-message-default-logo']",
+      "[data-testid='waiting-spinner']",
+      "[aria-busy='true']",
+    ];
+    for (const sel of sels) {
+      for (const el of document.querySelectorAll(sel)) {
+        if (this.isDisplayed(el)) return true;
+      }
+    }
+    const wait = document.querySelector("[data-testid='waiting-message']");
+    if (wait && this.isDisplayed(wait)) {
+      const t = this.clean(wait.innerText || "");
+      if (/searching|looking for|finding flight|please wait|loading/i.test(t)) return true;
+    }
+    return false;
+  }
+
+  async kickVirtualList() {
+    const list = document.querySelector("[data-testid='itinerary-list']");
+    const rail = document.querySelector("[data-testid^='sorting-tab-']");
+    const target = list || rail;
+    if (target) {
+      try {
+        target.scrollIntoView({ block: "center", inline: "nearest" });
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      const top = list
+        ? Math.max(0, window.scrollY + list.getBoundingClientRect().top - 72)
+        : 300;
+      window.scrollTo(0, top);
+      window.dispatchEvent(new Event("scroll"));
+      window.dispatchEvent(new Event("resize"));
+    } catch {
+      /* ignore */
+    }
+    if (list) {
+      try {
+        const h = Math.max(list.scrollHeight, 1);
+        for (const y of [0, 48, 160, Math.min(h - 1, 320), 1]) {
+          list.scrollTop = y;
+          list.dispatchEvent(new Event("scroll", { bubbles: true }));
+        }
+        list.dispatchEvent(
+          new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 120 })
+        );
+        for (const child of [...list.children].slice(0, 8)) {
+          try {
+            child.scrollIntoView({ block: "nearest" });
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      // Background tabs often never fire rAF; do not wait on it alone.
+      setTimeout(finish, 50);
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => requestAnimationFrame(finish));
+      }
+    });
   }
 
   priceButtons(card) {
@@ -170,11 +283,12 @@ class Plugin {
   }
 
   parseLeg(text) {
-    // e.g. "DEPARTURE · Vueling1 personal item06:502h 20'Direct10:10LGW London, Gatwick ...BCN Barcelona, El Pr..."
+    // e.g. "DEPARTURE · Vueling1 personal item06:502h 20'Direct10:10LGW ..."
+    // Connecting cards jam an overnight offset onto arrive: "1 stop10:30+1LGW ..."
     const t = this.clean(text);
     const carrier = t.match(/·\s*(.*?)(?=\d+\s*(?:personal|cabin|checked|bag)|hand luggage|cabin bag|no bag|\d{2}:\d{2})/i)?.[1]?.trim() || null;
     const m = t.match(
-      /(\d{2}:\d{2})\s*((?:\d+h)?\s*(?:\d+')?)\s*(Direct|\d+\s*stops?)\s*(\d{2}:\d{2})\s*([A-Z]{3})\s+(.*?)\s*([A-Z]{3})\s+(.*)$/
+      /(\d{2}:\d{2})\s*((?:\d+h)?\s*(?:\d+')?)\s*(Direct|\d+\s*stops?)\s*(\d{2}:\d{2}(?:\+\d+)?)\s*([A-Z]{3})\s+(.*?)\s*([A-Z]{3})\s+(.*)$/
     );
     return {
       carrier,
@@ -202,12 +316,14 @@ class Plugin {
     const price = text.match(/Non-discounted Price\s*([€$£][\s\d.,]+|[\d.,]+\s*[€$£])/i)?.[1];
     const prime = text.match(/Discounted Price\s*[€$£]?\s*[\d.,]+\s*([€$£]\s*[\d.,]+)/i)?.[1];
     const single = text.match(/Price\s*([€$£]\s*[\d.,]+)/i)?.[1];
+    const primePrice = this.clean(prime) || null;
     return {
       index,
       price: this.clean(price || single) || null,
-      primePrice: this.clean(prime) || null,
+      prime: Boolean(primePrice) || /prime fare/i.test(text),
+      primePrice,
       airlines: [...new Set(legs.map((l) => l.carrier).filter(Boolean))],
-      ticketsLeft: Number(text.match(/Only (\d+) tickets? left/i)?.[1]) || null,
+      ticketsLeft: Number(text.match(/Only (\d+) tickets? left/i)?.[1]) || (/Last ticket!/i.test(text) ? 1 : null),
       legs,
     };
   }
@@ -233,17 +349,40 @@ class Plugin {
     return m ? { shown: Number(m[1]), total: Number(m[2]) } : null;
   }
 
-  // Resolves as soon as there are cards, or the page says none match the
-  // filters. Only a page that never loads waits out the full timeout.
-  async waitForResults(tries = 40) {
-    for (let i = 0; i < tries; i += 1) {
-      await this.dismissConsent();
+  searchExpired() {
+    return /your search\b.*\bhas expired|search to .+ has expired/i.test(
+      this.clean(document.body?.innerText || "")
+    );
+  }
+
+  // Sidecar commands time out at 30s. Dismiss overlays once, then poll.
+  // Do not re-scan every button on the page each tick — that is what made
+  // results/sort hang until the extension timeout.
+  //
+  // The list is virtualized: "N of M flights match" (including "0 of M"
+  // while the search is still running) appears before any itinerary node is
+  // painted. A 1px scroll is not enough to mount rows. Wait for cards, not
+  // the counter, and keep kicking the list so IntersectionObserver paints.
+  //
+  // Fixtures may set <html data-edreams-wait-ms="4000"> so tests do not sit
+  // through the full production budget.
+  waitBudgetMs(maxMs) {
+    if (maxMs != null) return maxMs;
+    const raw = document.documentElement.getAttribute("data-edreams-wait-ms");
+    if (raw && /^\d+$/.test(raw)) return Number(raw);
+    return 22000;
+  }
+
+  async waitForResults(maxMs) {
+    await this.dismissConsent();
+    const deadline = Date.now() + this.waitBudgetMs(maxMs);
+    while (Date.now() < deadline) {
+      if (this.searchExpired()) return false;
+      await this.kickVirtualList();
       if (this.itineraries().length) return true;
-      const c = this.matchCounts();
-      if (c && c.shown === 0 && c.total > 0) return false;
-      await this.sleep(500);
+      await this.sleep(350);
     }
-    return false;
+    return this.itineraries().length > 0;
   }
 
   async sort(how = "cheapest") {
@@ -251,6 +390,7 @@ class Plugin {
     const id = { cheapest: "cheapest", cheap: "cheapest", price: "cheapest", best: "recommended", recommended: "recommended", fastest: "fastest", fast: "fastest", duration: "fastest" }[key];
     if (!id) throw new Error(`Unknown sort "${how}". Use cheapest, best, or fastest.`);
     if (!(await this.waitForResults())) {
+      if (this.searchExpired()) throw new Error("This eDreams search has expired. Run plugin.edreams search again.");
       if (this.matchCounts()?.shown === 0) return { sort: this.currentSort(), applied: false, count: 0 };
       throw new Error("No eDreams results on this tab. Run plugin.edreams search first.");
     }
@@ -317,9 +457,17 @@ class Plugin {
   async results(...extra) {
     if (extra.length) throw new Error("results does not take a sort order. Run plugin.edreams sort cheapest, then results.");
     if (!(await this.waitForResults())) {
+      if (this.searchExpired()) {
+        throw new Error("This eDreams search has expired. Run plugin.edreams search again.");
+      }
       const c = this.matchCounts();
       if (c && c.shown === 0) {
         return { url: location.href, count: 0, sort: this.currentSort(), matching: `0 of ${c.total} flights match`, flights: [] };
+      }
+      if (c && c.shown > 0) {
+        throw new Error(
+          `eDreams reports "${c.shown} of ${c.total} flights match" but itinerary cards did not render. Bring this tab to the front and run results again.`
+        );
       }
       throw new Error(`This tab is not showing eDreams results (${this.pageKind()}: ${location.href}). Run plugin.edreams search first.`);
     }
@@ -358,6 +506,7 @@ class Plugin {
 
   async status() {
     const { consent } = await this.dismissConsent();
+    await this.kickVirtualList();
     return {
       consentDismissed: consent,
       url: location.href,
