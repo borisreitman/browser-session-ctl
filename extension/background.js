@@ -473,6 +473,67 @@ async function activeTab() {
   return fallback;
 }
 
+// Runs window.__bscReact[fn](...args) in the page's MAIN world, where React's
+// fiber expandos are visible (the isolated content-script world cannot see
+// them). react-hook.js is already there from document_start; react-probe.js is
+// injected on demand and is idempotent.
+async function reactCall(tab, fn, args) {
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "MAIN",
+    files: ["react-probe.js"],
+  });
+  const [injection] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "MAIN",
+    args: [fn, args],
+    func: async (name, callArgs) => {
+      try {
+        const api = globalThis.__bscReact;
+        if (typeof api?.[name] !== "function") {
+          throw new Error(`Unknown react function "${name}". Try: ${Object.keys(api || {}).join(", ")}`);
+        }
+        const value = await api[name](...callArgs);
+        return { ok: true, value: value === undefined ? null : JSON.parse(JSON.stringify(value)) };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  });
+  const payload = injection?.result;
+  if (!payload?.ok) throw new Error(payload?.error || "react call failed");
+  return payload.value;
+}
+
+// Which engine drives click/type/press on this tab: React's own handlers when
+// the page is React (auto), or plain DOM events. params.engine can force one.
+async function useReact(tab, params) {
+  if (params.engine === "dom") return false;
+  if (params.engine === "react") return true;
+  try {
+    return Boolean(await reactCall(tab, "isReact", []));
+  } catch {
+    return false;
+  }
+}
+
+const refSelector = (ref) => `[data-ba-ref="${String(ref).replace(/"/g, "")}"]`;
+
+// Tries a React-variant action. Returns the result tagged engine:"react", or
+// null when the caller should fall back to DOM events. A disabled control is a
+// real answer, not a reason to fall back.
+async function tryReact(tab, fn, args) {
+  try {
+    return { ...(await reactCall(tab, fn, args)), engine: "react" };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/ is disabled| is read-only/.test(message)) throw err;
+    return { fallback: true, reactError: message };
+  }
+}
+
+const asDom = (result, extra) => ({ ...(result && typeof result === "object" ? result : { result }), engine: "dom", ...extra });
+
 async function tabById(tabId) {
   const tab = tabId == null ? await activeTab() : await getTabOrThrow(tabId);
   if (isRestricted(tab.url)) {
@@ -809,49 +870,74 @@ async function handleCommand(message) {
 
     case "page.click": {
       const tab = await tabById(params.tabId);
+      const react = await useReact(tab, params);
       let ref = params.ref;
+      let note;
+      if (react && !ref && params.name) {
+        const r = await tryReact(tab, "click", [params.name]);
+        if (!r.fallback) return r;
+        note = { reactError: r.reactError };
+      }
       if (!ref && params.name) {
         try {
           const found = unwrap(await sendToPage(tab, { action: "find", name: params.name }));
           ref = found.ref;
         } catch {
-          return clickByVisibleText(tab, params.name);
+          return asDom(await clickByVisibleText(tab, params.name), note);
         }
       }
       if (!ref) throw new Error("ref or name is required");
+      if (react) {
+        const r = await tryReact(tab, "click", [refSelector(ref)]);
+        if (!r.fallback) return { ref, ...r };
+        note = { reactError: r.reactError };
+      }
       try {
-        return unwrap(await sendToPage(tab, { action: "click", ref }));
+        return asDom(unwrap(await sendToPage(tab, { action: "click", ref })), note);
       } catch (err) {
-        if (params.name) return clickByVisibleText(tab, params.name);
+        if (params.name) return asDom(await clickByVisibleText(tab, params.name), note);
         throw err;
       }
     }
 
     case "page.type": {
       const tab = await tabById(params.tabId);
+      const react = await useReact(tab, params);
+      const text = params.text ?? "";
+      const submit = Boolean(params.submit);
       let ref = params.ref;
+      let note;
+      const viaReact = async (selector) => {
+        const r = await tryReact(tab, "fill", [selector, text]);
+        if (r.fallback) { note = { reactError: r.reactError }; return null; }
+        if (submit) {
+          const k = await tryReact(tab, "press", [selector, "Enter"]);
+          if (k.fallback) { note = { reactError: k.reactError }; return null; }
+          r.submitted = k.called;
+        }
+        return { ref, value: r.now, ...r };
+      };
+      if (react && !ref && params.name) {
+        const done = await viaReact(params.name);
+        if (done) return done;
+      }
       if (!ref && params.name) {
         try {
           const found = unwrap(await sendToPage(tab, { action: "find", name: params.name }));
           ref = found.ref;
         } catch {
-          return typeByVisibleName(tab, params.name, params.text ?? "", Boolean(params.submit));
+          return asDom(await typeByVisibleName(tab, params.name, text, submit), note);
         }
       }
       if (!ref) throw new Error("ref or name is required");
+      if (react) {
+        const done = await viaReact(refSelector(ref));
+        if (done) return done;
+      }
       try {
-        return unwrap(
-          await sendToPage(tab, {
-            action: "type",
-            ref,
-            text: params.text ?? "",
-            submit: Boolean(params.submit),
-          })
-        );
+        return asDom(unwrap(await sendToPage(tab, { action: "type", ref, text, submit })), note);
       } catch (err) {
-        if (params.name) {
-          return typeByVisibleName(tab, params.name, params.text ?? "", Boolean(params.submit));
-        }
+        if (params.name) return asDom(await typeByVisibleName(tab, params.name, text, submit), note);
         throw err;
       }
     }
@@ -879,7 +965,13 @@ async function handleCommand(message) {
     case "page.press": {
       const tab = await tabById(params.tabId);
       if (!params.key) throw new Error("key is required");
-      return unwrap(await sendToPage(tab, { action: "press", key: params.key }));
+      let note;
+      if (await useReact(tab, params)) {
+        const r = await tryReact(tab, "press", [":focus", params.key]);
+        if (!r.fallback) return r;
+        note = { reactError: r.reactError };
+      }
+      return asDom(unwrap(await sendToPage(tab, { action: "press", key: params.key })), note);
     }
 
     case "page.scroll": {
@@ -901,6 +993,33 @@ async function handleCommand(message) {
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
       return { dataUrl, url: tab.url, title: tab.title };
     }
+
+    case "react.call": {
+      const tab = await tabById(params.tabId);
+      const value = await reactCall(tab, String(params.fn || "detect"), Array.isArray(params.args) ? params.args : []);
+      sendToPage(tab, { action: "touch" }).catch(() => {});
+      return value;
+    }
+
+    case "page.status": {
+      const tab = params.tabId == null ? await activeTab() : await getTabOrThrow(params.tabId);
+      const base = { tabId: tab.id, url: tab.url, title: tab.title, loading: tab.status === "loading" };
+      if (isRestricted(tab.url) || isBlankTab(tab.url)) {
+        return { ...base, automatable: false, engine: null, note: "restricted or blank page" };
+      }
+      try {
+        const info = await reactCall(tab, "pageInfo", []);
+        return { ...base, automatable: true, engine: info.react.isReact ? "react" : "dom", ...info };
+      } catch (err) {
+        return { ...base, automatable: true, engine: "dom", error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case "ext.reload":
+      // Dev loop: pick up edits to manifest/background/content without
+      // clicking the reload arrow on chrome://extensions.
+      setTimeout(() => chrome.runtime.reload(), 100);
+      return { reloading: true };
 
     case "plugin.list": {
       await pluginsReady;

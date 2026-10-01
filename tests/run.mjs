@@ -357,6 +357,174 @@ async function testRyanair(tabId) {
   check("select returns the FR2735 offer", selected.selected?.flight === "FR2735", JSON.stringify(selected.selected));
 }
 
+async function testReact(tabId) {
+  console.log("\n== react-app.html (React internals via MAIN world) ==");
+  const react = (fn, ...args) => command("react.call", { tabId, fn, args });
+  const settle = () => new Promise((r) => setTimeout(r, 100));
+
+  await command("page.navigate", { tabId, url: fixture("react/react-app.html") });
+  const det = await waitFor(async () => {
+    const d = await react("detect");
+    return d.isReact ? d : null;
+  }, { timeout: 4000 });
+  check("detect reports React", det?.isReact === true, JSON.stringify(det));
+  check(
+    "document_start hook registered the renderer (version, dev build)",
+    det?.version === "18.3.1" && det?.dev === true && det?.evidence.hookRenderers.length === 1,
+    JSON.stringify(det?.evidence)
+  );
+  check("hook saw the root commit", det?.hook?.commits >= 1 && det?.hook?.roots.length === 1, JSON.stringify(det?.hook));
+
+  const tree = JSON.stringify(await react("tree"));
+  check("tree lists App, Counter, SearchBox, Todos", ["App", "Counter", "SearchBox", "Todos"].every((n) => tree.includes(`"${n}"`)), tree);
+
+  const counter = await react("inspect", "Counter");
+  check("inspect reads props and useState", counter?.props.label === "Clicks" && counter.hooks[0].value === 0, JSON.stringify(counter));
+
+  const countText = async () => (await command("page.text", { tabId })).text;
+  await react("invoke", "#inc", "onClick");
+  await settle();
+  check("invoke onClick re-renders", (await countText()).includes("Clicks: 1"), (await countText()).slice(0, 120));
+
+  await react("setHookState", "Counter", 0, 41);
+  await settle();
+  check("setHookState writes useState", (await countText()).includes("Clicks: 41"));
+
+  await react("setValue", "#q", "hello react");
+  await settle();
+  const snap = await command("page.snapshot", { tabId });
+  check("setValue shows in the normal snapshot too", Boolean(snap.elements.find((e) => e.value === "hello react")), snap.text);
+  check("SearchBox state matches", (await react("inspect", "SearchBox")).hooks[0].value === "hello react");
+
+  await react("invoke", "form", "onSubmit");
+  await settle();
+  check("onSubmit lifts state to App", (await countText()).includes("last search: hello react"));
+
+  await react("invoke", "#add", "onClick");
+  await react("invoke", "li:nth-child(1) input", "onChange");
+  await settle();
+  const todos = (await react("inspect", "Todos")).hooks[0].value;
+  check("useReducer dispatch via handlers", todos.length === 2 && todos[0].done === true, JSON.stringify(todos));
+
+  const live = await command("page.snapshot", { tabId });
+  const box = live.elements.find((e) => e.role === "checkbox" && e.name === "write fixture");
+  check("DOM reflects the toggle (checkbox checked)", box?.checked === true, JSON.stringify(live.elements.filter((e) => e.role === "checkbox")));
+
+  // --- every control type, through React props ---
+  const state = async () => (await react("inspect", "Controls")).hooks[0].value;
+  const controls = await react("controls");
+  const byId = (id) => controls.find((c) => c.selector === `#${id}`);
+  check(
+    "controls lists checkbox/select/text/switch with handlers and owner",
+    byId("subscribe")?.control === "checkbox" && byId("subscribe").handlers.includes("onChange") &&
+      byId("color")?.options.length === 3 && byId("notify")?.control === "aria-toggle" && byId("subscribe").owner === "Controls",
+    JSON.stringify(controls.map((c) => [c.selector, c.control]))
+  );
+  check("controls flags disabled and uncontrolled", byId("locked")?.disabled === true && !byId("plain")?.controlled && byId("code")?.controlled === true);
+
+  let r = await react("fill", "#subscribe", true);
+  check("checkbox: handler reading e.target.checked sees true", (await state()).subscribe === true && r.via === "react" && r.applied, JSON.stringify(r));
+  r = await react("fill", "#subscribe", true);
+  check("checkbox: already checked is a no-op", r.noop === true);
+  r = await react("fill", "Subscribe", false);
+  check("checkbox: fill by label, uncheck", (await state()).subscribe === false && r.applied, JSON.stringify(r));
+
+  r = await react("fill", "input[name=plan]", "pro");
+  check("radio: pick by value within the group", (await state()).plan === "pro" && r.applied, JSON.stringify(r));
+  r = await react("fill", "input[name=plan]", "Plan free");
+  check("radio: pick by label", (await state()).plan === "free", JSON.stringify(await state()));
+
+  r = await react("fill", "#color", "Green");
+  check("select: option by visible label", (await state()).color === "green" && r.applied, JSON.stringify(r));
+  r = await react("fill", "#tags", ["a", "c"]);
+  check("select multiple: sets all picked options", JSON.stringify((await state()).tags) === '["a","c"]' && r.applied, JSON.stringify(r));
+  let bad = "";
+  try { await react("fill", "#color", "Purple"); } catch (e) { bad = e.message; }
+  check("select: unknown option lists the choices", /No option "Purple".*Green/.test(bad), bad);
+
+  await react("fill", "#bio", "line1\nline2");
+  await react("fill", "#age", 42);
+  await react("fill", "#volume", 80);
+  const st = await state();
+  check("textarea / number / range", st.bio === "line1\nline2" && st.age === "42" && st.volume === "80", JSON.stringify(st));
+
+  r = await react("fill", "#code", "abcdefgh");
+  check(
+    "controlled input that rewrites: DOM shows what React kept, applied=false",
+    (await state()).code === "ABCD" && r.now === "ABCD" && r.applied === false,
+    JSON.stringify(r)
+  );
+
+  r = await react("fill", "#plain", "typed");
+  check("no React handler: falls back to DOM events", r.via === "dom" && r.now === "typed", JSON.stringify(r));
+
+  r = await react("fill", "#notify", true);
+  check("ARIA switch div with onClick", (await state()).notify === true && r.applied, JSON.stringify(r));
+
+  bad = "";
+  try { await react("click", "#locked"); } catch (e) { bad = e.message; }
+  check("click on disabled button is refused, handler not run", /disabled/.test(bad) && !(await state()).log.includes("locked clicked"), bad);
+
+  await react("click", "#inner");
+  check("stopPropagation stops the bubble to #outer", JSON.stringify((await state()).log) === '["inner"]', JSON.stringify((await state()).log));
+
+  await react("click", "#send");
+  check("submit button click runs form onSubmit", (await state()).log.includes("submit"));
+
+  await react("fill", "#q", "via enter");
+  await react("press", "#q", "Enter");
+  check("press Enter in a field submits its form", (await countText()).includes("last search: via enter"), (await countText()).slice(0, 160));
+
+  const batch = await react("fillForm", { "#bio": "batch", "#age": 7, "#nope": "x" });
+  check(
+    "fillForm reports per-field results and keeps going after an error",
+    batch[0].ok && batch[1].ok && batch[2].ok === false && (await state()).age === "7",
+    JSON.stringify(batch)
+  );
+
+  // --- status + automatic engine selection on the plain CLI verbs ---
+  const status = await command("page.status", { tabId });
+  check(
+    "status reports React, version, engine, components",
+    status.engine === "react" && status.react.isReact && status.react.version === "18.3.1" &&
+      status.react.rootComponents.includes("App") && status.react.controls > 10 && status.url.endsWith("react-app.html"),
+    JSON.stringify(status)
+  );
+
+  let snapNow = await command("page.snapshot", { tabId });
+  const refOf = (name, role) => snapNow.elements.find((e) => e.name === name && e.role === role)?.ref;
+  let out = await command("page.type", { tabId, ref: refOf("Bio", "textbox"), text: "auto engine" });
+  check("type auto-routes to React on a React page", out.engine === "react" && (await state()).bio === "auto engine", JSON.stringify(out));
+  out = await command("page.type", { tabId, name: "Search", text: "named", submit: true });
+  check("type by label + submit goes through React (fill + Enter)", out.engine === "react" && (await countText()).includes("last search: named"), JSON.stringify(out));
+  out = await command("page.click", { tabId, ref: refOf("Subscribe", "checkbox") });
+  check("click on a checkbox ref toggles through React", out.engine === "react" && (await state()).subscribe === true, JSON.stringify(out));
+  out = await command("page.click", { tabId, name: "Increment" });
+  check("click by name uses React", out.engine === "react" && (await countText()).includes("Clicks: 42"), JSON.stringify(out));
+  out = await command("page.click", { tabId, name: "Increment", engine: "dom" });
+  check("engine=dom forces plain DOM events", out.engine === "dom" && (await countText()).includes("Clicks: 43"), JSON.stringify(out));
+  await command("page.type", { tabId, ref: refOf("Bio", "textbox"), text: "x" });
+  out = await command("page.press", { tabId, key: "Enter" });
+  check("press auto-routes to React", out.engine === "react", JSON.stringify(out));
+  let refused = "";
+  try { await command("page.click", { tabId, name: "Locked" }); } catch (e) { refused = e.message; }
+  check("click on a disabled control surfaces the error, no silent fallback", /disabled/.test(refused), refused);
+
+  await command("page.navigate", { tabId, url: fixture("form.html") });
+  const plain = await waitFor(async () => {
+    const d = await react("detect");
+    return d && !d.isReact ? d : null;
+  }, { timeout: 4000 });
+  check("non-React page reports isReact=false", plain?.isReact === false, JSON.stringify(plain));
+
+  const plainStatus = await command("page.status", { tabId });
+  check("status on a plain page says engine=dom", plainStatus.engine === "dom" && plainStatus.react.isReact === false, JSON.stringify(plainStatus));
+  const plainSnap = await command("page.snapshot", { tabId });
+  const nameBox = plainSnap.elements.find((e) => e.name === "Full name");
+  const typed = await command("page.type", { tabId, ref: nameBox.ref, text: "Ada" });
+  check("type on a plain page stays on DOM events", typed.engine === "dom", JSON.stringify(typed));
+}
+
 async function main() {
   const health = await fetch(`${origin()}/health`).then((r) => r.json());
   if (!health.ok || !health.extensionConnected) {
@@ -378,6 +546,7 @@ async function main() {
   await testLinksAndClicks(tabId);
   await testEdreams(tabId);
   await testRyanair(tabId);
+  await testReact(tabId);
 
   if (process.env.CLOSE_TAB === "1") {
     await command("tabs.close", { tabId });

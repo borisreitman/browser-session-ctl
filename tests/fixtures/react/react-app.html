@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>React Fixture</title></head>
+<body>
+<div id="root"></div>
+<script src="vendor/react.development.js"></script>
+<script src="vendor/react-dom.development.js"></script>
+<script>
+  // No JSX / build step: plain createElement so the fixture is one file.
+  const { createElement: h, useState, useReducer, createContext, useContext } = React;
+  const Theme = createContext("light");
+
+  function Counter({ label }) {
+    const [count, setCount] = useState(0);
+    return h("div", { className: "counter" },
+      h("span", { id: "count" }, `${label}: ${count}`),
+      h("button", { id: "inc", onClick: () => setCount((c) => c + 1) }, "Increment"));
+  }
+
+  function SearchBox({ onSearch }) {
+    const [query, setQuery] = useState("");
+    return h("form", { onSubmit: (e) => { e.preventDefault(); onSearch(query); } },
+      h("label", null, "Search ",
+        h("input", { id: "q", value: query, onChange: (e) => setQuery(e.target.value) })),
+      h("button", { type: "submit" }, "Go"));
+  }
+
+  function todoReducer(state, action) {
+    if (action.type === "add") return [...state, { id: state.length + 1, text: action.text, done: false }];
+    if (action.type === "toggle") return state.map((t) => (t.id === action.id ? { ...t, done: !t.done } : t));
+    return state;
+  }
+
+  function Todos() {
+    const [todos, dispatch] = useReducer(todoReducer, [{ id: 1, text: "write fixture", done: false }]);
+    const theme = useContext(Theme);
+    return h("section", { "data-theme": theme },
+      h("button", { id: "add", onClick: () => dispatch({ type: "add", text: "item " + (todos.length + 1) }) }, "Add todo"),
+      h("ul", null, todos.map((t) =>
+        h("li", { key: t.id, className: t.done ? "done" : "" },
+          h("label", null,
+            h("input", { type: "checkbox", checked: t.done, onChange: () => dispatch({ type: "toggle", id: t.id }) }),
+            t.text)))));
+  }
+
+  function Controls() {
+    const [f, setF] = useState({ subscribe: false, plan: "free", color: "", tags: [], bio: "", age: "", volume: 50, code: "", notify: false, log: [] });
+    const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+    const log = (m) => setF((s) => ({ ...s, log: [...s.log, m] }));
+    return h("form", { id: "signup", onSubmit: (e) => { e.preventDefault(); log("submit"); } },
+      h("h2", null, "Controls"),
+      // Handlers read e.target.* — they only work if the DOM state is set first.
+      h("label", null, "Subscribe ", h("input", { type: "checkbox", id: "subscribe", checked: f.subscribe, onChange: (e) => set("subscribe", e.target.checked) })),
+      h("fieldset", null, ["free", "pro"].map((p) =>
+        h("label", { key: p }, "Plan " + p + " ", h("input", { type: "radio", name: "plan", value: p, checked: f.plan === p, onChange: (e) => set("plan", e.target.value) })))),
+      h("label", null, "Color ", h("select", { id: "color", value: f.color, onChange: (e) => set("color", e.target.value) },
+        h("option", { value: "" }, "Choose"), h("option", { value: "red" }, "Red"), h("option", { value: "green" }, "Green"))),
+      h("label", null, "Tags ", h("select", { id: "tags", multiple: true, value: f.tags, onChange: (e) => set("tags", [...e.target.selectedOptions].map((o) => o.value)) },
+        ["a", "b", "c"].map((t) => h("option", { key: t, value: t }, "Tag " + t.toUpperCase())))),
+      h("label", null, "Bio ", h("textarea", { id: "bio", value: f.bio, onChange: (e) => set("bio", e.target.value) })),
+      h("label", null, "Age ", h("input", { id: "age", type: "number", value: f.age, onChange: (e) => set("age", e.target.value) })),
+      h("label", null, "Volume ", h("input", { id: "volume", type: "range", min: 0, max: 100, value: f.volume, onChange: (e) => set("volume", e.target.value) })),
+      // Rewrites its input: the DOM must end up showing what React accepted.
+      h("label", null, "Code ", h("input", { id: "code", value: f.code, onChange: (e) => set("code", e.target.value.slice(0, 4).toUpperCase()) })),
+      // No React handler at all: operations must fall back to DOM events.
+      h("label", null, "Plain ", h("input", { id: "plain", defaultValue: "" })),
+      h("div", { id: "notify", role: "switch", "aria-checked": String(f.notify), tabIndex: 0, onClick: () => set("notify", !f.notify) }, "Notify"),
+      h("button", { id: "locked", type: "button", disabled: true, onClick: () => log("locked clicked") }, "Locked"),
+      h("div", { id: "outer", onClick: () => log("outer") },
+        h("button", { id: "inner", type: "button", onClick: (e) => { e.stopPropagation(); log("inner"); } }, "Inner")),
+      h("button", { type: "submit", id: "send" }, "Send"),
+      h("pre", { id: "state" }, JSON.stringify(f)));
+  }
+
+  function App() {
+    const [last, setLast] = useState("");
+    return h(Theme.Provider, { value: "dark" },
+      h("main", null,
+        h("h1", null, "React Fixture"),
+        h(Counter, { label: "Clicks" }),
+        h(SearchBox, { onSearch: setLast }),
+        h("p", { id: "last" }, "last search: " + last),
+        h(Todos),
+        h(Controls)));
+  }
+
+  // Bundlers hide components behind minified names; keep ours readable.
+  ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+</script>
+</body>
+</html>

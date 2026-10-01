@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "browser-session-ctl",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Lets a local agent drive this Chrome session on any website.",
   "permissions": [
     "tabs",
@@ -21,6 +21,13 @@
     "default_popup": "popup.html"
   },
   "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*", "file:///*"],
+      "js": ["react-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
     {
       "matches": ["http://*/*", "https://*/*"],
       "js": ["content.js"],

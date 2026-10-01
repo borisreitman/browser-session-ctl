@@ -42,12 +42,18 @@ Usage:
   browser-session-ctl debug-annotate-highlight [action|active|idle]
   browser-session-ctl config
   browser-session-ctl config annotate-new-tabs [on|off]
+  browser-session-ctl react [detect|tree|inspect|invoke|setValue|setHookState|...] [json-or-string args...]
+  browser-session-ctl reload-extension
   browser-session-ctl plugin.<namespace> [args...]
   browser-session-ctl plugin-list
   browser-session-ctl plugin-load <namespace> <file.js>
   browser-session-ctl plugin-inject <namespace> [file.js]
   browser-session-ctl plugin-unload <namespace>
 
+--dom | --react
+            click / type / press auto-detect React pages and drive them through
+            React's own handlers (see \`status\`). These flags force plain DOM
+            events or React handlers instead.
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
 
@@ -80,7 +86,12 @@ function printUsage() {
   process.stderr.write(USAGE);
 }
 
+// Set from --dom / --react: forces the engine for click/type/press. Unset means
+// auto: the extension drives React pages through React's own handlers.
+let engine;
+
 async function command(method, params = {}) {
+  if (engine && method.startsWith("page.")) params = { ...params, engine };
   const response = await fetch(`${origin()}/command`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -110,6 +121,10 @@ function parseArgs(argv) {
       const value = arg.slice("--tab=".length);
       tabId = Number(value);
       if (!Number.isInteger(tabId) || tabId <= 0) throw new Error(`invalid --tab: ${value}`);
+      continue;
+    }
+    if (arg === "--dom" || arg === "--react") {
+      engine = arg.slice(2);
       continue;
     }
     positional.push(arg);
@@ -248,7 +263,15 @@ async function main(argv) {
   switch (verb) {
     case "status": {
       const response = await fetch(`${origin()}/health`);
-      printResult(await response.json());
+      const health = await response.json();
+      if (health.extensionConnected) {
+        try {
+          health.page = await command("page.status", withTab({}, tabId));
+        } catch (err) {
+          health.page = { error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      printResult(health);
       return;
     }
     case "tabs":
@@ -342,6 +365,17 @@ async function main(argv) {
       printResult({ path, url: result.url, title: result.title });
       return;
     }
+    case "react": {
+      const [fn = "detect", ...raw] = rest;
+      const args = raw.map((a) => {
+        try { return JSON.parse(a); } catch { return a; }
+      });
+      printResult(await command("react.call", withTab({ fn, args }, tabId)));
+      return;
+    }
+    case "reload-extension":
+      printResult(await command("ext.reload", {}));
+      return;
     case "annotate": {
       const arg = (rest[0] || "on").toLowerCase();
       if (arg !== "on" && arg !== "off") throw new Error("annotate expects on or off");

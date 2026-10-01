@@ -140,6 +140,8 @@ browser-session-ctl click e4 --tab 123456789
 
 Screenshot of a background `--tab` will briefly focus that tab (Chrome can only capture what is on screen).
 
+`status` also describes the active page, including whether it is a React page; on React pages `click`, `type` and `press` automatically drive React's own handlers (see [doc/react.md](doc/react.md); `--dom` forces plain DOM events).
+
 `snapshot` lists visible controls with refs (`e1`, `e2`, …). Snapshot, act, then snapshot again. On sites you do not control the DOM changes; stale refs fail on purpose.
 
 `options` reads every choice on a dropdown from the DOM (`<select>` options, listbox items, custom menus). If the menu is closed and empty, it opens the control and slurps again.
