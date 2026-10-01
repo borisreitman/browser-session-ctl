@@ -32,57 +32,6 @@ class Plugin {
     };
   }
 
-  sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  fireClick(target) {
-    const rect = target.getBoundingClientRect();
-    const opts = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: rect.left + Math.max(rect.width / 2, 1),
-      clientY: rect.top + Math.max(rect.height / 2, 1),
-      button: 0,
-    };
-    target.dispatchEvent(new PointerEvent("pointerdown", opts));
-    target.dispatchEvent(new MouseEvent("mousedown", opts));
-    target.dispatchEvent(new PointerEvent("pointerup", opts));
-    target.dispatchEvent(new MouseEvent("mouseup", opts));
-    target.dispatchEvent(new MouseEvent("click", opts));
-  }
-
-  clickEl(el) {
-    if (!el) return;
-    this.fireClick(el);
-    if (typeof el.click === "function") el.click();
-  }
-
-  clean(s) {
-    return String(s || "").replace(/\s+/g, " ").trim();
-  }
-
-  isDisplayed(el) {
-    if (!el) return false;
-    const r = el.getBoundingClientRect();
-    if (r.width < 2 || r.height < 2) return false;
-    const st = getComputedStyle(el);
-    return st.display !== "none" && st.visibility !== "hidden" && Number(st.opacity) !== 0;
-  }
-
-  looksLikeDate(value) {
-    return /^\d{4}-\d{1,2}-\d{1,2}$/.test(value) || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value);
-  }
-
-  toIsoDate(value) {
-    const us = String(value).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
-    const iso = String(value).match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
-    throw new Error(`Unrecognized date "${value}". Use YYYY-MM-DD or MM/DD/YYYY.`);
-  }
-
   airport(value) {
     const code = String(value || "").trim().toUpperCase();
     if (!/^[A-Z]{3}$/.test(code)) {
@@ -96,14 +45,14 @@ class Plugin {
     const params = {
       from: this.airport(from),
       to: this.airport(to),
-      depart: this.toIsoDate(depart),
+      depart: bsc.dates.toIso(depart),
       returnDate: null,
       adults: 1,
     };
     for (const token of rest) {
       if (token == null || token === "") continue;
       const lower = String(token).toLowerCase();
-      if (this.looksLikeDate(token)) params.returnDate = this.toIsoDate(token);
+      if (bsc.dates.looksLikeDate(token)) params.returnDate = bsc.dates.toIso(token);
       else if (lower === "oneway" || lower === "one-way") params.returnDate = null;
       else if (/^\d+$/.test(token)) {
         params.adults = Number(token);
@@ -142,7 +91,7 @@ class Plugin {
   cookieButton() {
     const nodes = document.querySelectorAll("button, [role='button']");
     for (const el of nodes) {
-      if (/^no,\s*thanks$/i.test(this.clean(el.textContent)) && this.isDisplayed(el)) return el;
+      if (/^no,\s*thanks$/i.test(bsc.clean(el.textContent)) && bsc.isDisplayed(el)) return el;
     }
     return null;
   }
@@ -150,9 +99,9 @@ class Plugin {
   async dismissCookies() {
     const btn = this.cookieButton();
     if (!btn) return { cookies: false };
-    this.clickEl(btn);
+    bsc.click(btn);
     for (let i = 0; i < 8; i += 1) {
-      await this.sleep(150);
+      await bsc.sleep(150);
       if (!this.cookieButton()) return { cookies: true };
     }
     return { cookies: true };
@@ -197,15 +146,15 @@ class Plugin {
   }
 
   flightCards() {
-    const tagged = [...document.querySelectorAll("flight-card")].filter((el) => this.isDisplayed(el));
+    const tagged = [...document.querySelectorAll("flight-card")].filter((el) => bsc.isDisplayed(el));
     if (tagged.length) return this.uniqueCards(tagged);
     const byClass = [...document.querySelectorAll("[class*='flight-card']")].filter(
-      (el) => this.isDisplayed(el) && /FR\s*\d+/i.test(el.innerText || "") && /Select/i.test(el.innerText || "")
+      (el) => bsc.isDisplayed(el) && /FR\s*\d+/i.test(el.innerText || "") && /Select/i.test(el.innerText || "")
     );
     if (byClass.length) return this.uniqueCards(byClass);
     const fallback = [];
     for (const btn of document.querySelectorAll("button")) {
-      if (!/^select$/i.test(this.clean(btn.textContent)) || !this.isDisplayed(btn)) continue;
+      if (!/^select$/i.test(bsc.clean(btn.textContent)) || !bsc.isDisplayed(btn)) continue;
       let el = btn.parentElement;
       for (let i = 0; i < 8 && el; i += 1) {
         const t = el.innerText || "";
@@ -225,7 +174,7 @@ class Plugin {
       let sib = el.previousElementSibling;
       while (sib) {
         const heading = /^H[1-3]$/.test(sib.tagName) ? sib : sib.querySelector?.("h1, h2, h3");
-        const text = this.clean(heading?.textContent || "");
+        const text = bsc.clean(heading?.textContent || "");
         if (heading && /\bto\b/i.test(text) && text.length < 80) return text;
         sib = sib.previousElementSibling;
       }
@@ -235,7 +184,7 @@ class Plugin {
   }
 
   parseFlight(card, index, leg) {
-    const t = this.clean(card.innerText || "");
+    const t = bsc.clean(card.innerText || "");
     const num = t.match(/FR\s*(\d+)/i)?.[1];
     const times = [...t.matchAll(/\b(\d{2}:\d{2})\b/g)].map((m) => m[1]);
     const duration = t.match(/(\d+h\s*\d+m)/i)?.[1] || null;
@@ -249,7 +198,7 @@ class Plugin {
       depart: times[0] || null,
       arrive: times[1] || null,
       duration,
-      price: price ? this.clean(price) : null,
+      price: price ? bsc.clean(price) : null,
       seatsLeft: seats,
       operatedBy,
       title: this.journeyTitle(card),
@@ -286,8 +235,8 @@ class Plugin {
 
   dateTabs() {
     return [...document.querySelectorAll("button")].filter((b) => {
-      if (!this.isDisplayed(b)) return false;
-      return /^\d{1,2}[A-Z][a-z]{2}\b/.test(this.clean(b.textContent).replace(/\s+/g, ""));
+      if (!bsc.isDisplayed(b)) return false;
+      return /^\d{1,2}[A-Z][a-z]{2}\b/.test(bsc.clean(b.textContent).replace(/\s+/g, ""));
     });
   }
 
@@ -297,7 +246,7 @@ class Plugin {
     while (Date.now() < deadline) {
       if (this.flightCards().length) return true;
       if (/no flights|we don.t fly|sold out/i.test(document.body?.innerText || "")) return false;
-      await this.sleep(350);
+      await bsc.sleep(350);
     }
     return this.flightCards().length > 0;
   }
@@ -316,17 +265,17 @@ class Plugin {
     if (!want) throw new Error(`Unknown sort "${how}". Use cheapest, earliest, latest, or regular.`);
     if (!(await this.waitForResults())) throw new Error("No Ryanair flights on this tab. Run plugin.ryanair search first.");
     const openers = [...document.querySelectorAll("button")].filter((b) =>
-      /^sort flights by/i.test(this.clean(b.textContent))
+      /^sort flights by/i.test(bsc.clean(b.textContent))
     );
     if (!openers.length) throw new Error("No Sort flights by control on this page.");
-    this.clickEl(openers[0]);
-    await this.sleep(400);
+    bsc.click(openers[0]);
+    await bsc.sleep(400);
     const opt = [...document.querySelectorAll("button, [role='option'], [role='menuitem'], li, a")].find(
-      (el) => this.isDisplayed(el) && want.test(this.clean(el.textContent)) && !/^sort flights by/i.test(this.clean(el.textContent))
+      (el) => bsc.isDisplayed(el) && want.test(bsc.clean(el.textContent)) && !/^sort flights by/i.test(bsc.clean(el.textContent))
     );
     if (!opt) throw new Error(`No sort option matching "${how}".`);
-    this.clickEl(opt);
-    await this.sleep(800);
+    bsc.click(opt);
+    await bsc.sleep(800);
     return { sort: key, applied: true, count: this.flightCards().length };
   }
 
@@ -342,22 +291,22 @@ class Plugin {
       throw new Error("usage: day <outbound|return> <YYYY-MM-DD>");
     }
     if (!date) throw new Error("usage: day <outbound|return> <YYYY-MM-DD>");
-    const iso = this.toIsoDate(date);
+    const iso = bsc.dates.toIso(date);
     const needle = `${Number(iso.slice(8, 10))}${this.monthShort(iso)}`;
     if (!(await this.waitForResults())) throw new Error("No Ryanair flights on this tab. Run plugin.ryanair search first.");
     const tabs = this.dateTabs();
     if (!tabs.length) throw new Error("No date tabs on this page.");
     const mid = Math.ceil(tabs.length / 2);
     const pool = leg === "outbound" ? tabs.slice(0, mid) : tabs.slice(mid);
-    const hit = pool.find((b) => this.clean(b.textContent).replace(/\s+/g, "").startsWith(needle));
+    const hit = pool.find((b) => bsc.clean(b.textContent).replace(/\s+/g, "").startsWith(needle));
     if (!hit) {
       throw new Error(
-        `No ${leg} date tab for ${iso}. Visible: ${tabs.map((b) => this.clean(b.textContent).slice(0, 24)).join(" | ")}`
+        `No ${leg} date tab for ${iso}. Visible: ${tabs.map((b) => bsc.clean(b.textContent).slice(0, 24)).join(" | ")}`
       );
     }
     hit.scrollIntoView({ block: "center" });
-    this.clickEl(hit);
-    await this.sleep(1000);
+    bsc.click(hit);
+    await bsc.sleep(1000);
     return { leg: leg === "outbound" ? "outbound" : "return", date: iso, count: this.flightCards().length };
   }
 
@@ -382,7 +331,7 @@ class Plugin {
   }
 
   selectButton(card) {
-    return [...card.querySelectorAll("button")].find((b) => /^select$/i.test(this.clean(b.textContent)) && this.isDisplayed(b));
+    return [...card.querySelectorAll("button")].find((b) => /^select$/i.test(bsc.clean(b.textContent)) && bsc.isDisplayed(b));
   }
 
   async select(legOrIndex, maybeIndex) {
@@ -420,16 +369,16 @@ class Plugin {
     const btn = this.selectButton(card);
     if (!btn) throw new Error("No Select button on that card.");
     btn.scrollIntoView({ block: "center", behavior: "instant" });
-    await this.sleep(150);
-    this.clickEl(btn);
-    await this.sleep(800);
+    await bsc.sleep(150);
+    bsc.click(btn);
+    await bsc.sleep(800);
     const basic = [...document.querySelectorAll("button, [role='button']")].find((el) => {
-      const t = this.clean(el.textContent);
-      return this.isDisplayed(el) && /basic/i.test(t) && /fare|select|continue|£|€|\$/i.test(t);
+      const t = bsc.clean(el.textContent);
+      return bsc.isDisplayed(el) && /basic/i.test(t) && /fare|select|continue|£|€|\$/i.test(t);
     });
     if (basic) {
-      this.clickEl(basic);
-      await this.sleep(800);
+      bsc.click(basic);
+      await bsc.sleep(800);
     }
     return { selected: offer, url: location.href, title: document.title };
   }

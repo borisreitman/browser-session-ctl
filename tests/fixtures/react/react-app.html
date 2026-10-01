@@ -69,6 +69,7 @@
       h("div", { id: "outer", onClick: () => log("outer") },
         h("button", { id: "inner", type: "button", onClick: (e) => { e.stopPropagation(); log("inner"); } }, "Inner")),
       h("button", { type: "submit", id: "send" }, "Send"),
+      h("p", { id: "ghost", hidden: true }, "hidden"),
       h("pre", { id: "state" }, JSON.stringify(f)));
   }
 

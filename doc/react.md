@@ -22,6 +22,10 @@ Force an engine with `--dom` or `--react`.
 
 Both must run in the MAIN world: the isolated content-script world cannot see expandos set by page scripts.
 
+## From a plugin
+
+Plugins call the same engine directly and choose the variant themselves: `bsc.click(el)` for plain DOM events or `bsc.reactClick(el)` for React handlers (see [plugins.md](plugins.md#the-bsc-api-core-methods-inside-plugins)). Only the CLI auto-detects, because only there is the caller driving a page it knows nothing about.
+
 ## React-only commands
 
 ```bash

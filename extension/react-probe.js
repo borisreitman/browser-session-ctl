@@ -337,13 +337,17 @@
     return clean(el.getAttribute?.("placeholder") || el.getAttribute?.("title") || el.value && el.tagName === "BUTTON" && el.value || el.textContent).slice(0, 80);
   }
 
+  // form.children is shadowed by a field named "children"; use the real getter.
+  const childrenGetter = Object.getOwnPropertyDescriptor(Element.prototype, "children").get;
+  const childrenOf = (el) => childrenGetter.call(el);
+
   function cssPath(el) {
     const unique = (id) => id && document.querySelectorAll(`#${CSS.escape(id)}`).length === 1;
     if (unique(el.id)) return `#${CSS.escape(el.id)}`;
     const parts = [];
     for (let n = el; n && n.nodeType === 1 && n !== document.documentElement; n = n.parentElement) {
       if (unique(n.id)) { parts.unshift(`#${CSS.escape(n.id)}`); break; }
-      const same = [...n.parentElement.children].filter((c) => c.tagName === n.tagName);
+      const same = n.parentElement ? [...childrenOf(n.parentElement)].filter((c) => c.tagName === n.tagName) : [n];
       parts.unshift(`${n.tagName.toLowerCase()}${same.length > 1 ? `:nth-of-type(${same.indexOf(n) + 1})` : ""}`);
     }
     return parts.join(" > ");
@@ -497,10 +501,12 @@
     else if (!r.defaultPrevented) HTMLFormElement.prototype.submit.call(form);
   }
 
-  async function click(target) {
+  // opts.fallback === false: when no React handler handles it, do nothing and
+  // report via:"none" so the caller can apply its own DOM-event sequence.
+  async function click(target, opts = {}) {
     const el = resolveControl(target);
     const kind = kindOf(el);
-    if (kind === "checkbox" || kind === "radio") return fill(el, kind === "radio" ? true : undefined);
+    if (kind === "checkbox" || kind === "radio") return fill(el, kind === "radio" ? true : undefined, opts);
     if (isDisabled(el)) throw new Error(`${cssPath(el)} is disabled`);
     el.focus?.({ preventScroll: true });
     const report = { target: cssPath(el), control: kind || "element", via: "react", called: [] };
@@ -510,7 +516,8 @@
       report.defaultPrevented = r.defaultPrevented;
     }
     if (!report.called.length) {
-      el.click(); report.via = "dom";
+      if (opts.fallback === false) report.via = "none";
+      else { el.click(); report.via = "dom"; }
     } else if (!report.defaultPrevented) {
       const submit = el.closest?.("button, input");
       const form = submit?.form;
@@ -524,7 +531,7 @@
     return report;
   }
 
-  async function fill(target, value) {
+  async function fill(target, value, opts = {}) {
     let el = resolveControl(target);
     let kind = kindOf(el);
     if (!kind) {
@@ -533,7 +540,7 @@
       if (inner) { el = inner; kind = kindOf(el); }
     }
     if (!kind || kind === "hidden" || kind === "file") throw new Error(`${cssPath(el)} is not a fillable control (${kind || el.tagName})`);
-    if (kind === "button" || kind === "clickable") return click(el);
+    if (kind === "button" || kind === "clickable") return click(el, opts);
     // A radio selector + string value picks the radio in that group by value/label.
     if (kind === "radio" && typeof value === "string" && !/^(true|false)$/i.test(value) && el.name) {
       const mates = [...document.querySelectorAll("input[type=radio]")].filter((r) => r.name === el.name && r.form === el.form);
@@ -547,6 +554,7 @@
     const report = { target: typeof target === "string" ? target : cssPath(el), control: kind, owner: componentChain(el)[0] || null, via: "react", called: [] };
     const fire = (type, init) => { const r = dispatchReact(el, type, init); report.called.push(...r.called); return r; };
     const domEvents = () => {
+      if (opts.fallback === false) { report.via = "none"; return; }
       report.via = "dom";
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -566,7 +574,10 @@
       const text = String(value ?? "");
       el.textContent = text;
       fire("input", { data: text });
-      if (!report.called.length) { report.via = "dom"; el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text })); }
+      if (!report.called.length) {
+        if (opts.fallback === false) report.via = "none";
+        else { report.via = "dom"; el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text })); }
+      }
       return finish(el, kind, report, text);
     }
 
@@ -577,14 +588,18 @@
       setNative(el, "checked", want);
       const c = fire("click");
       if (c.defaultPrevented) { setNative(el, "checked", !want); } else { fire("change"); }
-      if (!report.called.length) { setNative(el, "checked", !want); el.click(); report.via = "dom"; }
+      if (!report.called.length) {
+        setNative(el, "checked", !want);
+        if (opts.fallback === false) report.via = "none";
+        else { el.click(); report.via = "dom"; }
+      }
       return finish(el, kind, report, want);
     }
 
     if (kind === "aria-toggle" || kind === "aria-radio") {
       const want = kind === "aria-radio" ? true : value === undefined ? el.getAttribute("aria-checked") !== "true" : toBool(value);
       if ((el.getAttribute("aria-checked") === "true") === want) { report.noop = true; report.now = want; report.applied = true; return report; }
-      const c = await click(el);
+      const c = await click(el, opts);
       Object.assign(report, { via: c.via, called: c.called });
       return finish(el, kind, report, want);
     }
@@ -619,7 +634,7 @@
     return results;
   }
 
-  async function press(target, key = "Enter") {
+  async function press(target, key = "Enter", opts = {}) {
     const el = resolveControl(target);
     const init = { key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, keyCode: KEYCODES[key] || key.toUpperCase().charCodeAt(0) };
     el.focus?.({ preventScroll: true });
@@ -631,7 +646,9 @@
     if (!down.defaultPrevented && key === "Enter" && el instanceof HTMLInputElement && el.form && kindOf(el) === "text") {
       submitForm(el.form, report); // implicit submission
     }
-    if (!report.called.length) {
+    if (!report.called.length && opts.fallback === false) {
+      report.via = "none";
+    } else if (!report.called.length) {
       report.via = "dom";
       for (const t of ["keydown", "keypress", "keyup"]) el.dispatchEvent(new KeyboardEvent(t, { key, code: init.code, bubbles: true, cancelable: true }));
     }

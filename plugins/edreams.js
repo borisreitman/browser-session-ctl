@@ -38,44 +38,6 @@ class Plugin {
     };
   }
 
-  sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  fireClick(target) {
-    const rect = target.getBoundingClientRect();
-    const opts = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: rect.left + Math.max(rect.width / 2, 1),
-      clientY: rect.top + Math.max(rect.height / 2, 1),
-      button: 0,
-    };
-    target.dispatchEvent(new PointerEvent("pointerdown", opts));
-    target.dispatchEvent(new MouseEvent("mousedown", opts));
-    target.dispatchEvent(new PointerEvent("pointerup", opts));
-    target.dispatchEvent(new MouseEvent("mouseup", opts));
-    target.dispatchEvent(new MouseEvent("click", opts));
-  }
-
-  clean(s) {
-    return String(s || "").replace(/\s+/g, " ").trim();
-  }
-
-  // eDreams wants YYYY-MM-DD in the URL.
-  toIsoDate(value) {
-    const us = String(value).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
-    const iso = String(value).match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
-    throw new Error(`Unrecognized date "${value}". Use YYYY-MM-DD or MM/DD/YYYY.`);
-  }
-
-  looksLikeDate(value) {
-    return /^\d{4}-\d{1,2}-\d{1,2}$/.test(value) || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value);
-  }
-
   airport(value) {
     const code = String(value || "").trim().toUpperCase();
     if (!/^[A-Z]{3}$/.test(code)) {
@@ -89,14 +51,14 @@ class Plugin {
     const params = {
       from: this.airport(from),
       to: this.airport(to),
-      depart: this.toIsoDate(depart),
+      depart: bsc.dates.toIso(depart),
       returnDate: null,
       adults: 1,
     };
     for (const token of rest) {
       if (token == null || token === "") continue;
       const lower = String(token).toLowerCase();
-      if (this.looksLikeDate(token)) params.returnDate = this.toIsoDate(token);
+      if (bsc.dates.looksLikeDate(token)) params.returnDate = bsc.dates.toIso(token);
       else if (lower === "oneway" || lower === "one-way") params.returnDate = null;
       else if (/^\d+$/.test(token)) {
         params.adults = Number(token);
@@ -137,7 +99,7 @@ class Plugin {
     const re = /^(continue without agreeing|i understand)$/i;
     const nodes = document.querySelectorAll("a, button, [role='button']");
     for (const el of nodes) {
-      if (re.test(this.clean(el.textContent))) return el;
+      if (re.test(bsc.clean(el.textContent))) return el;
     }
     return null;
   }
@@ -153,10 +115,9 @@ class Plugin {
   async dismissConsent() {
     const btn = this.overlayButton();
     if (!btn) return { consent: false };
-    this.fireClick(btn);
-    if (typeof btn.click === "function") btn.click();
+    bsc.click(btn);
     for (let i = 0; i < 10; i += 1) {
-      await this.sleep(200);
+      await bsc.sleep(200);
       if (!this.hasConsentModal()) return { consent: true };
     }
     // Prime "I understand" sometimes stays in the DOM but is inert; keep going.
@@ -190,14 +151,6 @@ class Plugin {
     return byTestId.concat(extra);
   }
 
-  isDisplayed(el) {
-    if (!el) return false;
-    const r = el.getBoundingClientRect();
-    if (r.width < 2 || r.height < 2) return false;
-    const st = getComputedStyle(el);
-    return st.display !== "none" && st.visibility !== "hidden" && Number(st.opacity) !== 0;
-  }
-
   // True while the waiting page / spinner is actually on screen. The waiting
   // widget stays in the DOM after results with Prime copy, so presence alone
   // is not a loading signal.
@@ -210,12 +163,12 @@ class Plugin {
     ];
     for (const sel of sels) {
       for (const el of document.querySelectorAll(sel)) {
-        if (this.isDisplayed(el)) return true;
+        if (bsc.isDisplayed(el)) return true;
       }
     }
     const wait = document.querySelector("[data-testid='waiting-message']");
-    if (wait && this.isDisplayed(wait)) {
-      const t = this.clean(wait.innerText || "");
+    if (wait && bsc.isDisplayed(wait)) {
+      const t = bsc.clean(wait.innerText || "");
       if (/searching|looking for|finding flight|please wait|loading/i.test(t)) return true;
     }
     return false;
@@ -285,7 +238,7 @@ class Plugin {
   parseLeg(text) {
     // e.g. "DEPARTURE · Vueling1 personal item06:502h 20'Direct10:10LGW ..."
     // Connecting cards jam an overnight offset onto arrive: "1 stop10:30+1LGW ..."
-    const t = this.clean(text);
+    const t = bsc.clean(text);
     const carrier = t.match(/·\s*(.*?)(?=\d+\s*(?:personal|cabin|checked|bag)|hand luggage|cabin bag|no bag|\d{2}:\d{2})/i)?.[1]?.trim() || null;
     const m = t.match(
       /(\d{2}:\d{2})\s*((?:\d+h)?\s*(?:\d+')?)\s*(Direct|\d+\s*stops?)\s*(\d{2}:\d{2}(?:\+\d+)?)\s*([A-Z]{3})\s+(.*?)\s*([A-Z]{3})\s+(.*)$/
@@ -312,14 +265,14 @@ class Plugin {
       const chunk = raw.slice(mk.index, end).replace(/Only \d+ tickets? left.*$/i, "");
       legs.push({ way: mk[1].toLowerCase(), ...this.parseLeg(chunk) });
     });
-    const text = this.clean(card.innerText || raw);
+    const text = bsc.clean(card.innerText || raw);
     const price = text.match(/Non-discounted Price\s*([€$£][\s\d.,]+|[\d.,]+\s*[€$£])/i)?.[1];
     const prime = text.match(/Discounted Price\s*[€$£]?\s*[\d.,]+\s*([€$£]\s*[\d.,]+)/i)?.[1];
     const single = text.match(/Price\s*([€$£]\s*[\d.,]+)/i)?.[1];
-    const primePrice = this.clean(prime) || null;
+    const primePrice = bsc.clean(prime) || null;
     return {
       index,
-      price: this.clean(price || single) || null,
+      price: bsc.clean(price || single) || null,
       prime: Boolean(primePrice) || /prime fare/i.test(text),
       primePrice,
       airlines: [...new Set(legs.map((l) => l.carrier).filter(Boolean))],
@@ -345,13 +298,13 @@ class Plugin {
 
   // "N of M flights match these filters" — present once the list has loaded.
   matchCounts() {
-    const m = this.clean(document.body?.innerText || "").match(/(\d+) of (\d+) flights match/i);
+    const m = bsc.clean(document.body?.innerText || "").match(/(\d+) of (\d+) flights match/i);
     return m ? { shown: Number(m[1]), total: Number(m[2]) } : null;
   }
 
   searchExpired() {
     return /your search\b.*\bhas expired|search to .+ has expired/i.test(
-      this.clean(document.body?.innerText || "")
+      bsc.clean(document.body?.innerText || "")
     );
   }
 
@@ -380,7 +333,7 @@ class Plugin {
       if (this.searchExpired()) return false;
       await this.kickVirtualList();
       if (this.itineraries().length) return true;
-      await this.sleep(350);
+      await bsc.sleep(350);
     }
     return this.itineraries().length > 0;
   }
@@ -400,15 +353,15 @@ class Plugin {
       return { sort: id, applied: false, count: this.itineraries().length };
     }
     tab.scrollIntoView({ block: "center" });
-    this.fireClick(tab);
-    await this.sleep(1000);
+    await bsc.reactClick(tab);
+    await bsc.sleep(1000);
     return { sort: this.currentSort() || id, applied: true, count: this.itineraries().length };
   }
 
   carrierBoxes() {
     return [...document.querySelectorAll("input[data-testid^='carrier_checkbox_']")].map((input) => {
       const label = input.closest("label") || input.parentElement;
-      const name = this.clean(label?.textContent || "").replace(/Only$/i, "").trim();
+      const name = bsc.clean(label?.textContent || "").replace(/Only$/i, "").trim();
       return { code: input.value, name, checked: input.checked, input };
     });
   }
@@ -420,26 +373,26 @@ class Plugin {
   async airline(...args) {
     await this.dismissConsent();
     const only = /^only$/i.test(args[0] || "");
-    const query = this.clean((only ? args.slice(1) : args).join(" ")).toLowerCase();
+    const query = bsc.clean((only ? args.slice(1) : args).join(" ")).toLowerCase();
     if (!query) throw new Error("usage: airline [only] <code|name>");
     await this.waitForResults();
     const boxes = this.carrierBoxes();
     if (!boxes.length) throw new Error("No airline filters on this page. Run search first.");
     const hits = boxes.filter((b) => b.code.toLowerCase() === query || b.name.toLowerCase().includes(query));
     if (!hits.length) throw new Error(`No airline matches "${query}". Run airlines to list them.`);
-    const set = (box, want) => {
+    const set = async (box, want) => {
       if (box.input.checked !== want) {
         box.input.scrollIntoView({ block: "center" });
-        box.input.click();
+        await bsc.reactClick(box.input);
       }
     };
     if (only) {
       // Uncheck everything else, keep only matches.
-      for (const b of boxes) set(b, hits.includes(b));
+      for (const b of boxes) await set(b, hits.includes(b));
     } else {
-      for (const b of hits) set(b, !b.input.checked);
+      for (const b of hits) await set(b, !b.input.checked);
     }
-    await this.sleep(1000);
+    await bsc.sleep(1000);
     return { airlines: this.airlines().filter((b) => hits.some((h) => h.code === b.code)), count: this.itineraries().length };
   }
 
@@ -449,8 +402,8 @@ class Plugin {
     const box = document.querySelector("[data-testid='only-direct-flights-checkbox']");
     if (!box) throw new Error("No 'Direct flights' checkbox on this page");
     const input = box.matches("input") ? box : box.querySelector("input") || box;
-    input.click();
-    await this.sleep(1000);
+    await bsc.reactClick(input);
+    await bsc.sleep(1000);
     return { direct: Boolean(input.checked), count: this.itineraries().length };
   }
 
@@ -471,14 +424,14 @@ class Plugin {
       }
       throw new Error(`This tab is not showing eDreams results (${this.pageKind()}: ${location.href}). Run plugin.edreams search first.`);
     }
-    await this.sleep(500);
+    await bsc.sleep(500);
     const flights = this.parseOffers();
     return {
       url: location.href,
       title: document.title,
       count: flights.length,
       sort: this.currentSort(),
-      matching: this.clean(document.body?.innerText || "").match(/(\d+) of (\d+) flights match/i)?.[0] || null,
+      matching: bsc.clean(document.body?.innerText || "").match(/(\d+) of (\d+) flights match/i)?.[0] || null,
       flights,
     };
   }
@@ -497,10 +450,9 @@ class Plugin {
     const btn = buttons.find((b) => /non-discounted/i.test(b.textContent)) || buttons[0];
     if (!btn) throw new Error("No price button on that itinerary");
     btn.scrollIntoView({ block: "center", behavior: "instant" });
-    await this.sleep(150);
-    this.fireClick(btn);
-    if (typeof btn.click === "function") btn.click();
-    await this.sleep(1500);
+    await bsc.sleep(150);
+    await bsc.reactClick(btn);
+    await bsc.sleep(1500);
     return { selected: offer, url: location.href, title: document.title };
   }
 

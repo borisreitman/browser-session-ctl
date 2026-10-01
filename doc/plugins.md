@@ -40,3 +40,59 @@ Chrome cannot `eval` / `new Function` plugin source in the content-script world,
 - Per-page `this` is dropped on every load/inject push (all tabs are tainted). A new instance is built on this tab immediately, and on other tabs at the next invoke or taint delivery. Navigation or reload also drops `this`.
 - The persisted **source** stays until `plugin-unload`.
 - Changing `extension/` (not `plugins/`) still needs an extension reload, then use the new version number on the card.
+
+## The `bsc` API (core methods inside plugins)
+
+Plugins run in the extension's isolated world, which sees the page's DOM but not its JavaScript, so React internals and the page's own globals are invisible to them. Instead of reimplementing clicks, typing and waiting in every plugin, a plugin uses the global `bsc`, which is the same code the CLI uses.
+
+**A plugin knows how its site is built, so it picks the variant itself.** There is no auto-detection in plugin code. If the site is React, call `bsc.reactClick(el)`; if not, call `bsc.click(el)`. (Auto-detection exists only for the CLI verbs, where the caller is driving an arbitrary page and cannot know.) The React variants throw if the page is not React, and if no React handler takes the element, so a site that changes how it is built breaks the plugin loudly instead of silently misbehaving. Use the plain variant for an element React does not handle (a native link, a third-party widget); use `bsc.react.controls()` on the live page to see which elements have handlers. A site can mix: the same plugin may call `reactClick` for one element and `click` for another.
+
+### Plain DOM events (synchronous, take an element)
+
+| Call | What it does |
+| --- | --- |
+| `bsc.fireClick(el)` | pointerdown, mousedown, pointerup, mouseup and a synthetic click. |
+| `bsc.click(el)` | The same, then `el.click()`. |
+| `bsc.fill(el, text, { clear, typing, change })` | Native value setter plus an `input` event, then `change`. `typing` sends an `insertText` InputEvent after focusing; `clear` first empties the field with a `deleteContentBackward` event; `change: false` skips the `change` event. |
+| `bsc.select(selectEl, label, { partial })` | Pick an `<option>` by value or label (substring with `partial`), fire `input` and `change`, return the label. |
+| `bsc.press(el, key)` | keydown, keypress and keyup on the element, with `keyCode`. |
+
+### React handlers (async, take an element)
+
+| Call | What it does |
+| --- | --- |
+| `bsc.reactClick(el)` | Runs the element's mousedown, mouseup and click handlers in React's capture and bubble order, honouring `stopPropagation`. A checkbox or radio is toggled the way a click does. Throws for a disabled control. |
+| `bsc.reactFill(el, text)` | Sets the DOM value, then calls the field's `onInput` and `onChange`. |
+| `bsc.reactSelect(el, label, { partial })` | Same for a `<select>`; returns the label. |
+| `bsc.reactPress(el, key)` | keydown, keypress and keyup handlers; Enter in a field also submits its form. |
+| `bsc.isReact()` | Whether the page has a React renderer (for a plugin that wants to assert it). |
+| `bsc.react.<fn>(...)` | Any function of the page-side probe: `controls`, `inspect`, `tree`, `fill`, `click`, `setHookState`, … Arguments and results are JSON. |
+
+### Helpers and reads
+
+| Call | What it does |
+| --- | --- |
+| `bsc.sleep(ms)`, `bsc.clean(text)` | Delay; collapse whitespace and trim. |
+| `bsc.waitFor(fn, tries = 20, ms = 250)` | First truthy `fn()` (it may be async) or `null`. |
+| `bsc.isDisplayed(el, { minSize = 2 })` | Rendered, visible and at least `minSize` px each way. |
+| `bsc.dates.looksLikeDate(v)` / `.parse(v)` / `.toIso(v)` | `YYYY-MM-DD` or `MM/DD/YYYY` helpers. |
+| `bsc.status()`, `bsc.snapshot()`, `bsc.text()`, `bsc.find(name)`, `bsc.options(target)`, `bsc.scroll(dir)` | The CLI's page reads. |
+| `bsc.command(method, params)` | Escape hatch for a page-level command (`page.*`, `react.call`). Other commands are refused and the tab is always the plugin's own. |
+
+```js
+class Plugin {
+  async sortCheapest() {
+    const select = document.querySelector("#sort");
+    return await bsc.reactSelect(select, "Price: low to high", { partial: true }); // React site
+    // return bsc.select(select, "Price: low to high", { partial: true });        // native site
+  }
+
+  async openOffer(index) {
+    const button = this.offerButtons()[index];
+    await bsc.reactClick(button);
+    return await bsc.waitFor(() => document.querySelector(".fare-sheet"), 20, 250);
+  }
+}
+```
+
+Limits: `bsc` needs the isolated world. If a page's CSP forces the main-world fallback (see "Why a generated file"), `bsc` is not defined there. React variants on a disabled control throw rather than doing nothing, so wait for the control first (`await bsc.waitFor(() => !input.disabled)`).

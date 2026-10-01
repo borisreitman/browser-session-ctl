@@ -31,6 +31,7 @@
     inject(renderer) {
       const id = nextId++;
       state.renderers.set(id, renderer);
+      mark(renderer);
       return id;
     },
     checkDCE() {},
@@ -57,12 +58,26 @@
     };
   };
 
+  // The DOM is the one thing both worlds share. Mark <html> when a renderer
+  // registers, so isolated-world code (content script, plugins) can ask "is
+  // this React right now?" synchronously — including when an SPA mounts React
+  // after the first page load.
+  const mark = (renderer) => {
+    try {
+      const el = document.documentElement;
+      const have = (el.getAttribute("data-bsc-react") || "").split(",").filter(Boolean);
+      const v = String(renderer?.version || "unknown");
+      if (!have.includes(v)) el.setAttribute("data-bsc-react", [...have, v].join(","));
+    } catch {}
+  };
+
   if (existing) {
     // DevTools owns inject(); call it first so we can mirror the id it assigns.
     const origInject = hook.inject;
     hook.inject = function (renderer) {
       const id = origInject.apply(this, arguments);
       state.renderers.set(id, renderer);
+      mark(renderer);
       return id;
     };
   }

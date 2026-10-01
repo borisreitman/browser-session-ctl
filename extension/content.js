@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 23;
+  const VERSION = 26;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
@@ -543,21 +543,36 @@
     });
   }
 
-  function fireClick(el) {
-    el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
-    if (el instanceof HTMLElement) el.focus({ preventScroll: true });
-    const opts = { bubbles: true, cancelable: true, view: window };
-    el.dispatchEvent(new MouseEvent("pointerdown", opts));
+  // The one click sequence. Presets:
+  //   CLI / core click:  { scroll, focus, synthetic: false, native: true }
+  //   plugins' fireClick: { synthetic: true }              (events only)
+  //   plugins' clickEl:   { synthetic: true, native: true } (events, then el.click())
+  function fireClick(el, { scroll = false, focus = false, synthetic = true, native = false } = {}) {
+    if (scroll) el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    if (focus && el instanceof HTMLElement) el.focus({ preventScroll: true });
+    const rect = el.getBoundingClientRect();
+    const opts = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: rect.left + Math.max(rect.width / 2, 1),
+      clientY: rect.top + Math.max(rect.height / 2, 1),
+      button: 0,
+    };
+    el.dispatchEvent(new PointerEvent("pointerdown", opts));
     el.dispatchEvent(new MouseEvent("mousedown", opts));
-    el.dispatchEvent(new MouseEvent("pointerup", opts));
+    el.dispatchEvent(new PointerEvent("pointerup", opts));
     el.dispatchEvent(new MouseEvent("mouseup", opts));
-    if (typeof el.click === "function") el.click();
-    else el.dispatchEvent(new MouseEvent("click", opts));
+    if (synthetic) el.dispatchEvent(new MouseEvent("click", opts));
+    if (native) {
+      if (typeof el.click === "function") el.click();
+      else if (!synthetic) el.dispatchEvent(new MouseEvent("click", opts));
+    }
   }
 
   function click(ref) {
     const el = requireEl(ref);
-    fireClick(el);
+    fireClick(el, { scroll: true, focus: true, synthetic: false, native: true });
     return { ref, name: accessibleName(el) };
   }
 
@@ -705,11 +720,12 @@
     return value === undefined ? null : value;
   }
 
-  function press(key) {
-    const target = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : document.body;
-    const opts = { key, code: key, bubbles: true, cancelable: true };
+  const KEYCODES = { Enter: 13, Escape: 27, Tab: 9, Backspace: 8, " ": 32, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40 };
+
+  function press(key, el) {
+    const target = el || (document.activeElement instanceof HTMLElement ? document.activeElement : document.body);
+    const keyCode = KEYCODES[key] || (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
+    const opts = { key, code: key, keyCode, which: keyCode, bubbles: true, cancelable: true };
     target.dispatchEvent(new KeyboardEvent("keydown", opts));
     target.dispatchEvent(new KeyboardEvent("keypress", opts));
     target.dispatchEvent(new KeyboardEvent("keyup", opts));
@@ -721,6 +737,186 @@
     window.scrollBy({ top: delta, behavior: "instant" });
     return { y: window.scrollY };
   }
+
+  // ---- API for plugins -------------------------------------------------
+  //
+  // Plugins run in this same isolated world, so `bsc` is a plain global to
+  // them. A plugin is written for one site and knows how that site is built, so
+  // there is no auto-detection: it calls bsc.click(el) for plain DOM events or
+  // bsc.reactClick(el) for React handlers (likewise fill/reactFill,
+  // select/reactSelect, press/reactPress). The React variants throw when the
+  // page is not React, so a site that changes implementation breaks the plugin.
+  function bscCommand(method, params = {}) {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.runtime.sendMessage({ type: "bsc-command", method, params }, (response) => {
+          if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+          if (!response?.ok) return reject(new Error(response?.error || `${method} failed`));
+          resolve(response.result);
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  const bscTarget = (t) => (/^e\d+$/i.test(String(t)) ? { ref: String(t) } : { name: String(t) });
+  const bscReactCall = (fn, ...args) => bscCommand("react.call", { fn, args });
+
+  // react-hook.js marks <html data-bsc-react="18.3.1"> when a renderer registers.
+  // Without the marker (a tab opened before the extension loaded) ask the probe.
+  let reactProbeAt = 0;
+  let reactProbeVal = false;
+  async function isReactPage() {
+    if (document.documentElement.hasAttribute("data-bsc-react")) return true;
+    if (Date.now() - reactProbeAt < 1500) return reactProbeVal;
+    try { reactProbeVal = Boolean(await bscReactCall("isReact")); } catch { reactProbeVal = false; }
+    reactProbeAt = Date.now();
+    return reactProbeVal;
+  }
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const cleanText = (text) => String(text || "").replace(/\s+/g, " ").trim();
+
+  function isDisplayed(el, { minSize = 2 } = {}) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < minSize || r.height < minSize) return false;
+    const st = getComputedStyle(el);
+    return st.display !== "none" && st.visibility !== "hidden" && Number(st.opacity) !== 0;
+  }
+
+  // First truthy fn() within tries*ms, else null.
+  async function waitFor(fn, tries = 20, ms = 250) {
+    for (let i = 0; i < tries; i += 1) {
+      const v = await fn();
+      if (v) return v;
+      await sleep(ms);
+    }
+    return null;
+  }
+
+  const dates = {
+    looksLikeDate: (v) => /^\d{4}-\d{1,2}-\d{1,2}$/.test(v) || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(v),
+    parse(value) {
+      const us = String(value).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (us) return { y: Number(us[3]), m: Number(us[1]), d: Number(us[2]) };
+      const iso = String(value).match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+      if (iso) return { y: Number(iso[1]), m: Number(iso[2]), d: Number(iso[3]) };
+      throw new Error(`Unrecognized date "${value}". Use YYYY-MM-DD or MM/DD/YYYY.`);
+    },
+    toIso(value) {
+      const { y, m, d } = dates.parse(value);
+      return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    },
+  };
+
+  // Native DOM-event versions. Synchronous.
+  function setValueDom(el, text, { clear = false, typing = false, change = true } = {}) {
+    if (typing || clear) el.focus?.();
+    if (clear) {
+      setNativeValue(el, "");
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, data: "", inputType: "deleteContentBackward" }));
+    }
+    setNativeValue(el, text);
+    el.dispatchEvent(typing
+      ? new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" })
+      : new Event("input", { bubbles: true }));
+    if (change) el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function findOption(select, label, partial) {
+    const want = cleanText(label).toLowerCase();
+    const opts = [...select.options];
+    return opts.find((o) => o.value === String(label))
+      || opts.find((o) => cleanText(o.text).toLowerCase() === want)
+      || (partial ? opts.find((o) => cleanText(o.text).toLowerCase().includes(want)) : undefined);
+  }
+
+  function selectDom(select, label, { partial = false } = {}) {
+    const option = findOption(select, label, partial);
+    if (!option) throw new Error(`No option matching "${label}" (has: ${[...select.options].map((o) => cleanText(o.text)).join(", ")})`);
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
+    setter.call(select, option.value);
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    return cleanText(option.text);
+  }
+
+  // Elements can't cross into the main world, so lend them a temporary ref
+  // the page-side probe can find with a selector.
+  let adoptSeq = 0;
+  async function withRef(el, fn) {
+    const ref = `p${++adoptSeq}`;
+    refs.set(ref, el);
+    el.setAttribute("data-ba-ref", ref);
+    try {
+      return await fn(`[data-ba-ref="${ref}"]`);
+    } finally {
+      refs.delete(ref);
+      if (el.getAttribute("data-ba-ref") === ref) el.removeAttribute("data-ba-ref");
+    }
+  }
+
+  // React variants: drive the element's own React handler (onClick / onChange …)
+  // through the page-side probe. They throw if the page is not React, and if no
+  // React handler takes the element — there is no silent fallback to DOM events.
+  // A plugin picks the variant per element by calling click vs reactClick, etc.
+  async function reactOp(el, fn, ...args) {
+    if (!el) throw new Error(`${fn}: no element`);
+    if (!(await isReactPage())) {
+      throw new Error(`react ${fn} was called but this page is not React. The site has changed; the plugin needs updating.`);
+    }
+    const r = await withRef(el, (sel) => bscReactCall(fn, sel, ...args, { fallback: false }));
+    if (r.via === "none") {
+      const tag = el.tagName.toLowerCase();
+      const id = el.id ? `#${el.id}` : "";
+      const hook = el.getAttribute("data-hook") || el.getAttribute("data-testid") || "";
+      throw new Error(`No React handler on <${tag}${id}${hook ? ` ${hook}` : ""}> or its ancestors for ${fn}; this element is not driven by React`);
+    }
+    return r;
+  }
+
+  globalThis.bsc = {
+    // Plain DOM events on an element. Synchronous.
+    fireClick: (el) => fireClick(el, { synthetic: true }),               // pointer/mouse events incl. a synthetic click
+    click: (el) => fireClick(el, { synthetic: true, native: true }),     // the same, then el.click()
+    fill: setValueDom,                                                   // (el, text, { clear, typing, change })
+    select: selectDom,                                                   // (selectEl, label, { partial }) -> option label
+    press: (el, key) => press(key, el),                                  // keydown/keypress/keyup on el
+
+    // React handlers on an element. Async; see reactOp.
+    reactClick: (el) => reactOp(el, "click"),
+    reactFill: (el, text) => reactOp(el, "fill", text),
+    reactSelect: async (el, label, { partial = false } = {}) => {
+      const option = findOption(el, label, partial);
+      if (!option) throw new Error(`No option matching "${label}" (has: ${[...el.options].map((o) => cleanText(o.text)).join(", ")})`);
+      await reactOp(el, "fill", option.value);
+      return cleanText(option.text);
+    },
+    reactPress: (el, key) => reactOp(el, "press", key),
+    isReact: isReactPage,
+    // Any function of the page's React probe: bsc.react.controls(), .inspect("Cart"), .fill("#q", "x") ...
+    react: new Proxy(
+      { call: bscReactCall },
+      { get: (target, name) => (name in target ? target[name] : typeof name === "string" ? (...args) => bscReactCall(name, ...args) : undefined) }
+    ),
+
+    sleep, clean: cleanText, waitFor, isDisplayed, dates,
+
+    // Page reads and the extension's own commands.
+    command: bscCommand, // page-level only: page.* and react.call
+    status: () => bscCommand("page.status"),
+    snapshot: async () => snapshot(),
+    text: async () => ({ title: document.title, url: location.href, text: visibleText() }),
+    find: async (name) => findByName(name),
+    options: async (target) => {
+      const ref = /^e\d+$/i.test(String(target)) ? String(target) : findByName(String(target));
+      if (!ref) throw new Error(`No visible control named "${target}"`);
+      return listOptions(ref);
+    },
+    scroll: async (direction, amount) => scroll(direction, amount),
+  };
 
   function onPluginSync(message, sendResponse) {
     const reply = (work) => {

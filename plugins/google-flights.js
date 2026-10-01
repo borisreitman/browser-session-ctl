@@ -35,49 +35,6 @@ class Plugin {
     };
   }
 
-  sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  fireClick(target) {
-    const rect = target.getBoundingClientRect();
-    const opts = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: rect.left + Math.max(rect.width / 2, 1),
-      clientY: rect.top + Math.max(rect.height / 2, 1),
-      button: 0,
-    };
-    target.dispatchEvent(new PointerEvent("pointerdown", opts));
-    target.dispatchEvent(new MouseEvent("mousedown", opts));
-    target.dispatchEvent(new PointerEvent("pointerup", opts));
-    target.dispatchEvent(new MouseEvent("mouseup", opts));
-    target.dispatchEvent(new MouseEvent("click", opts));
-  }
-
-  clickEl(el) {
-    if (!el) return;
-    this.fireClick(el);
-    if (typeof el.click === "function") el.click();
-  }
-
-  clean(s) {
-    return String(s || "").replace(/\s+/g, " ").trim();
-  }
-
-  looksLikeDate(value) {
-    return /^\d{4}-\d{1,2}-\d{1,2}$/.test(value) || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value);
-  }
-
-  toIsoDate(value) {
-    const us = String(value).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
-    const iso = String(value).match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
-    throw new Error(`Unrecognized date "${value}". Use YYYY-MM-DD or MM/DD/YYYY.`);
-  }
-
   // Places Google would send to /travel/explore instead of a flight list.
   placeAliases() {
     return {
@@ -123,7 +80,7 @@ class Plugin {
       fromLabel: origin.label,
       toLabel: dest.label,
       resolved: { from: origin.resolved, to: dest.resolved },
-      depart: this.toIsoDate(depart),
+      depart: bsc.dates.toIso(depart),
       returnDate: null,
       trip: "oneway",
       cabin: "economy",
@@ -132,8 +89,8 @@ class Plugin {
     for (const token of rest) {
       if (token == null || token === "") continue;
       const lower = String(token).toLowerCase();
-      if (this.looksLikeDate(token)) {
-        params.returnDate = this.toIsoDate(token);
+      if (bsc.dates.looksLikeDate(token)) {
+        params.returnDate = bsc.dates.toIso(token);
         params.trip = "roundtrip";
         continue;
       }
@@ -186,20 +143,20 @@ class Plugin {
     const re =
       /^(reject all|reject additional cookies|stay signed out|no thanks|not now|continue without (agreeing|signing in))$/i;
     for (const el of document.querySelectorAll("button, [role='button'], a")) {
-      if (re.test(this.clean(el.textContent))) return el;
+      if (re.test(bsc.clean(el.textContent))) return el;
     }
     return null;
   }
 
   trackPricesClose() {
     const heading = [...document.querySelectorAll("h1, h2, h3, [role='heading']")].find((el) =>
-      /^track prices$/i.test(this.clean(el.textContent))
+      /^track prices$/i.test(bsc.clean(el.textContent))
     );
     if (!heading) return null;
     const root = heading.closest("[role='dialog'], [role='alertdialog'], div") || document;
     return (
       [...root.querySelectorAll("button, [role='button']")].find((el) =>
-        /^\s*close\s*$/i.test(this.clean(el.getAttribute("aria-label") || el.textContent))
+        /^\s*close\s*$/i.test(bsc.clean(el.getAttribute("aria-label") || el.textContent))
       ) || null
     );
   }
@@ -208,15 +165,15 @@ class Plugin {
     let dismissed = false;
     const cookie = this.overlayButton();
     if (cookie) {
-      this.clickEl(cookie);
+      bsc.click(cookie);
       dismissed = true;
-      await this.sleep(400);
+      await bsc.sleep(400);
     }
     const close = this.trackPricesClose();
     if (close) {
-      this.clickEl(close);
+      bsc.click(close);
       dismissed = true;
-      await this.sleep(300);
+      await bsc.sleep(300);
     }
     return { dismissed };
   }
@@ -229,7 +186,7 @@ class Plugin {
     const seen = new Set();
     const out = [];
     for (const el of document.querySelectorAll("a, [role='link']")) {
-      const label = this.clean(el.getAttribute("aria-label") || "");
+      const label = bsc.clean(el.getAttribute("aria-label") || "");
       if (!/^From \d/i.test(label) || !/dollars/i.test(label)) continue;
       const key = label.slice(0, 200);
       if (seen.has(key)) continue;
@@ -243,7 +200,7 @@ class Plugin {
     const seen = new Set();
     const out = [];
     for (const el of document.querySelectorAll("button, [role='button']")) {
-      const name = this.clean(el.getAttribute("aria-label") || el.textContent || "");
+      const name = bsc.clean(el.getAttribute("aria-label") || el.textContent || "");
       if (!/^[A-Za-z .'-]+ .+\d+ (hr|min).+\$[\d,]+/.test(name) && !/^[A-Za-z .'-]+ .+\$[\d,]+$/.test(name)) {
         continue;
       }
@@ -272,9 +229,9 @@ class Plugin {
   }
 
   parseOffer(el, index) {
-    const label = this.clean(el.getAttribute("aria-label") || "");
+    const label = bsc.clean(el.getAttribute("aria-label") || "");
     const card = el.closest("li, [role='listitem']") || el.parentElement || el;
-    const text = this.clean((card && card.innerText) || el.innerText || "");
+    const text = bsc.clean((card && card.innerText) || el.innerText || "");
     const dollars = label.match(/^From ([\d,]+) US dollars (round trip|one way) total/i);
     const stops = label.match(/\b(Nonstop|\d+\s*stops?)\b/i)?.[1] || text.match(/\b(Nonstop|\d+\s*stops?)\b/i)?.[1] || null;
     const airline = label.match(/flight with (.+?)\. Leaves /i)?.[1] || null;
@@ -308,7 +265,7 @@ class Plugin {
   }
 
   parseExplore(el, index) {
-    const label = this.clean(el.getAttribute("aria-label") || el.textContent || "");
+    const label = bsc.clean(el.getAttribute("aria-label") || el.textContent || "");
     const city = label.match(/^([A-Za-z .'-]+?)(?:\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)|\s+\$)/i)?.[1] || null;
     const dates = label.match(/\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[^$]*?)\s+(?:Nonstop|\d+\s*stops?)/i)?.[1] || null;
     const stops = label.match(/\b(Nonstop|\d+\s*stops?)\b/i)?.[1] || null;
@@ -329,7 +286,7 @@ class Plugin {
     const selected = [...document.querySelectorAll("[role='tab']")].find(
       (el) => el.getAttribute("aria-selected") === "true" || el.getAttribute("aria-checked") === "true"
     );
-    const name = this.clean(selected?.getAttribute("aria-label") || selected?.textContent || "");
+    const name = bsc.clean(selected?.getAttribute("aria-label") || selected?.textContent || "");
     if (/^cheapest/i.test(name)) return "cheapest";
     if (/^fastest/i.test(name)) return "fastest";
     if (/^best/i.test(name)) return "best";
@@ -360,7 +317,7 @@ class Plugin {
       if (this.offerLinks().length || this.exploreCards().length) return true;
       const t = document.body?.innerText || "";
       if (/no matching flights|couldn['’]t find any flights/i.test(t) && i > 4) return false;
-      await this.sleep(400);
+      await bsc.sleep(400);
     }
     return this.offerLinks().length > 0 || this.exploreCards().length > 0;
   }
@@ -370,7 +327,7 @@ class Plugin {
     const want = { cheapest: "cheapest", cheap: "cheapest", price: "cheapest", best: "best", fastest: "fastest", fast: "fastest", duration: "fastest" }[key];
     if (!want) throw new Error(`Unknown sort "${how}". Use cheapest, best, or fastest.`);
     const tabs = [...document.querySelectorAll("[role='tab']")];
-    const tab = tabs.find((el) => new RegExp(`^${want}\\b`, "i").test(this.clean(el.getAttribute("aria-label") || el.textContent || "")));
+    const tab = tabs.find((el) => new RegExp(`^${want}\\b`, "i").test(bsc.clean(el.getAttribute("aria-label") || el.textContent || "")));
     return { want, tab };
   }
 
@@ -385,8 +342,8 @@ class Plugin {
       return { sort: want, applied: false, count: this.offerLinks().length };
     }
     tab.scrollIntoView({ block: "center" });
-    this.clickEl(tab);
-    await this.sleep(1200);
+    bsc.click(tab);
+    await bsc.sleep(1200);
     return { sort: this.currentSort() || want, applied: true, count: this.offerLinks().length };
   }
 
@@ -399,7 +356,7 @@ class Plugin {
         `This tab is not showing Google Flights results (${this.pageKind()}: ${location.href}). Run plugin.google-flights search first.`
       );
     }
-    await this.sleep(400);
+    await bsc.sleep(400);
     if (this.offerLinks().length) {
       const flights = this.parseOffers();
       return {
@@ -446,7 +403,7 @@ class Plugin {
       const i = this.resolveOffer(needle, dests.map((d) => ({ ...d, label: d.label })));
       const el = this.exploreCards()[i];
       el.scrollIntoView({ block: "center", behavior: "instant" });
-      this.clickEl(el);
+      bsc.click(el);
       return { selected: dests[i], kind: "explore", url: location.href };
     }
     const flights = this.parseOffers();
@@ -454,10 +411,10 @@ class Plugin {
     const i = this.resolveOffer(needle, flights);
     const el = this.offerLinks()[i];
     el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
-    await this.sleep(150);
-    this.clickEl(el);
+    await bsc.sleep(150);
+    bsc.click(el);
     for (let n = 0; n < 20; n += 1) {
-      await this.sleep(400);
+      await bsc.sleep(400);
       if (/returning flights|select returning/i.test(document.body?.innerText || "")) break;
     }
     return {
@@ -473,15 +430,15 @@ class Plugin {
     let clicks = 0;
     for (; clicks < limit; clicks += 1) {
       const btn = [...document.querySelectorAll("button, [role='button']")].find((b) =>
-        /^view more flights$/i.test(this.clean(b.textContent))
+        /^view more flights$/i.test(bsc.clean(b.textContent))
       );
       if (!btn) break;
       const before = this.offerLinks().length;
       btn.scrollIntoView({ block: "center", behavior: "instant" });
-      this.clickEl(btn);
+      bsc.click(btn);
       let grew = false;
       for (let i = 0; i < 15; i += 1) {
-        await this.sleep(400);
+        await bsc.sleep(400);
         if (this.offerLinks().length > before) {
           grew = true;
           break;
@@ -498,21 +455,21 @@ class Plugin {
     const label =
       /^(any|all)$/.test(w) ? "any" : /^(0|non)/.test(w) ? "nonstop" : /^1/.test(w) ? "1 stop" : /^2/.test(w) ? "2" : w;
     const filter = [...document.querySelectorAll("button, [role='button']")].find((el) =>
-      /^stops\b/i.test(this.clean(el.getAttribute("aria-label") || el.textContent || ""))
+      /^stops\b/i.test(bsc.clean(el.getAttribute("aria-label") || el.textContent || ""))
     );
     if (!filter) throw new Error("No Stops filter on this page");
-    this.clickEl(filter);
-    await this.sleep(400);
+    bsc.click(filter);
+    await bsc.sleep(400);
     const opt = [...document.querySelectorAll("button, [role='option'], [role='radio'], label, li")].find((el) => {
-      const t = this.clean(el.textContent);
+      const t = bsc.clean(el.textContent);
       if (/^any(\s|$)/i.test(label)) return /^any\b/i.test(t);
       if (label === "nonstop") return /^nonstop\b/i.test(t);
       if (label === "1 stop") return /^1\s*stop or fewer|^1\s*stop\b/i.test(t);
       return t.toLowerCase().includes(label);
     });
     if (!opt) throw new Error(`No Stops option matching "${which}"`);
-    this.clickEl(opt);
-    await this.sleep(1000);
+    bsc.click(opt);
+    await bsc.sleep(1000);
     return { stops: which, count: this.offerLinks().length };
   }
 

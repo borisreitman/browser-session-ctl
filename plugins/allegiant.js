@@ -35,37 +35,8 @@ class Plugin {
     };
   }
 
-  sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  fireClick(target) {
-    const rect = target.getBoundingClientRect();
-    const opts = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: rect.left + Math.max(rect.width / 2, 1),
-      clientY: rect.top + Math.max(rect.height / 2, 1),
-      button: 0,
-    };
-    target.dispatchEvent(new PointerEvent("pointerdown", opts));
-    target.dispatchEvent(new MouseEvent("mousedown", opts));
-    target.dispatchEvent(new PointerEvent("pointerup", opts));
-    target.dispatchEvent(new MouseEvent("mouseup", opts));
-    target.dispatchEvent(new MouseEvent("click", opts));
-  }
-
-  clean(s) {
-    return String(s || "").replace(/\s+/g, " ").trim();
-  }
-
   hook(name) {
     return document.querySelector(`[data-hook='${name}']`);
-  }
-
-  looksLikeDate(value) {
-    return /^\d{4}-\d{1,2}-\d{1,2}$/.test(value) || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value);
   }
 
   airport(value) {
@@ -76,16 +47,8 @@ class Plugin {
     return code;
   }
 
-  toIsoDate(value) {
-    const us = String(value).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
-    const iso = String(value).match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
-    throw new Error(`Unrecognized date "${value}". Use YYYY-MM-DD or MM/DD/YYYY.`);
-  }
-
   parseIso(value) {
-    const iso = this.toIsoDate(value);
+    const iso = bsc.dates.toIso(value);
     const [y, m, d] = iso.split("-").map(Number);
     return { iso, y, m, d };
   }
@@ -95,14 +58,14 @@ class Plugin {
     const params = {
       from: this.airport(from),
       to: this.airport(to),
-      depart: this.toIsoDate(depart),
+      depart: bsc.dates.toIso(depart),
       returnDate: null,
       adults: 1,
     };
     for (const token of rest) {
       if (token == null || token === "") continue;
       const lower = String(token).toLowerCase();
-      if (this.looksLikeDate(token)) params.returnDate = this.toIsoDate(token);
+      if (bsc.dates.looksLikeDate(token)) params.returnDate = bsc.dates.toIso(token);
       else if (lower === "oneway" || lower === "one-way") params.returnDate = null;
       else if (/^\d+$/.test(token)) {
         params.adults = Number(token);
@@ -112,29 +75,17 @@ class Plugin {
     return params;
   }
 
+  isShown(el) {
+    return bsc.isDisplayed(el, { minSize: 0.01 });
+  }
+
   hasForm() {
     return Boolean(this.hook("flight-search-form"));
   }
 
-  isShown(el) {
-    if (!el) return false;
-    const rects = el.getClientRects();
-    if (!rects.length) return false;
-    const st = window.getComputedStyle(el);
-    if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) return false;
-    const r = rects[0];
-    return r.width > 0 && r.height > 0;
-  }
-
-  clickEl(el) {
-    if (!el) return;
-    this.fireClick(el);
-    if (typeof el.click === "function") el.click();
-  }
-
   cookieButton() {
     const understand = [...document.querySelectorAll("button, a, [role='button']")].find((b) =>
-      /^\s*I understand\s*$/i.test(this.clean(b.textContent))
+      /^\s*I understand\s*$/i.test(bsc.clean(b.textContent))
     );
     const accept = document.querySelector("#onetrust-accept-btn-handler");
     const el = understand || accept;
@@ -181,7 +132,7 @@ class Plugin {
 
   promoRoot() {
     const applies = [...document.querySelectorAll("a, button, [role='button']")].filter((el) =>
-      /^\s*apply now\s*$/i.test(this.clean(el.textContent)) && this.isShown(el)
+      /^\s*apply now\s*$/i.test(bsc.clean(el.textContent)) && this.isShown(el)
     );
     for (const el of applies) {
       const root = el.closest("[data-hook*='ice-pop'], [class*='Overlay'], [class*='Popup'], [role='dialog']");
@@ -197,7 +148,7 @@ class Plugin {
       ),
     ];
     return candidates.find((el) => {
-      const t = this.clean(el.textContent);
+      const t = bsc.clean(el.textContent);
       const aria = el.getAttribute("aria-label") || "";
       if (/apply now|allow all|search|continue|i understand/i.test(`${t} ${aria}`)) return false;
       if (/close/i.test(aria) || /close/i.test(el.getAttribute("data-hook") || "")) return this.isShown(el) || this.isShown(root);
@@ -226,7 +177,7 @@ class Plugin {
   async tap(el) {
     if (!el) return;
     if (this.hasOverlay()) await this.close();
-    this.clickEl(el);
+    await bsc.reactClick(el);
   }
 
   async close(waitMs) {
@@ -237,33 +188,23 @@ class Plugin {
       const cookie = this.cookieButton();
       const overlay = this.overlayCloseButton();
       if (cookie) {
-        this.clickEl(cookie);
+        bsc.click(cookie);
         out.cookies = true;
         out.dismissed.push("cookies");
-        await this.sleep(350);
+        await bsc.sleep(350);
         continue;
       }
       if (overlay) {
-        this.clickEl(overlay);
+        bsc.click(overlay);
         out.icepop = true;
         out.dismissed.push(overlay.getAttribute("data-hook") || overlay.getAttribute("aria-label") || "overlay");
-        await this.sleep(350);
+        await bsc.sleep(350);
         continue;
       }
       if (Date.now() >= deadline) break;
-      await this.sleep(300);
+      await bsc.sleep(300);
     }
     return out;
-  }
-
-  setInput(el, text) {
-    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-    el.focus();
-    set.call(el, "");
-    el.dispatchEvent(new InputEvent("input", { bubbles: true, data: "", inputType: "deleteContentBackward" }));
-    set.call(el, text);
-    el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
   airportOptions() {
@@ -275,9 +216,9 @@ class Plugin {
   // The To menu does not open on a click of the wrapper; ArrowDown on the
   // (enabled) input does. It stays disabled until From is chosen, and it lists
   // only the airports Allegiant sells from that origin.
-  openMenu(input) {
+  async openMenu(input) {
     input.focus();
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", keyCode: 40, bubbles: true }));
+    await bsc.reactPress(input, "ArrowDown");
   }
 
   menuOptions() {
@@ -285,7 +226,7 @@ class Plugin {
   }
 
   menuLabels() {
-    return [...new Set(this.menuOptions().map((el) => this.clean(el.textContent)))];
+    return [...new Set(this.menuOptions().map((el) => bsc.clean(el.textContent)))];
   }
 
   async pickAirport(which, code) {
@@ -297,23 +238,24 @@ class Plugin {
     const already = this.hook(`${hook}_input`);
     if (already?.value === code) return already.value;
     if (input.disabled) throw new Error(`The ${which} airport field is disabled. Pick From first.`);
-    await this.tap(wrap);
-    await this.sleep(200);
+    // react-select opens its menu from a handler inside the wrapper, so click the input.
+    await this.tap(input);
+    await bsc.sleep(200);
     input.focus();
-    this.setInput(input, code);
+    await bsc.reactFill(input, code);
     const want = `(${code})`;
     let opt = null;
     for (let i = 0; i < 15 && !opt; i += 1) {
-      await this.sleep(200);
+      await bsc.sleep(200);
       opt = this.menuOptions().find((el) => (el.textContent || "").includes(want));
     }
     if (!opt) {
       // Open the full menu (ArrowDown) and scan it: typing a code does not
       // always filter the way the label reads.
-      this.setInput(input, "");
-      this.openMenu(input);
+      await bsc.reactFill(input, "");
+      await this.openMenu(input);
       for (let i = 0; i < 15 && !opt; i += 1) {
-        await this.sleep(250);
+        await bsc.sleep(250);
         opt = this.menuOptions().find((el) => (el.textContent || "").includes(want));
       }
     }
@@ -326,12 +268,12 @@ class Plugin {
       );
     }
     await this.tap(opt);
-    await this.sleep(400);
+    await bsc.sleep(400);
     const hidden = this.hook(`${hook}_input`);
     if (hidden && hidden.value !== code) {
       throw new Error(`Picking ${code} as ${which} did not stick (hidden field is "${hidden.value || ""}")`);
     }
-    return this.clean(opt.textContent);
+    return bsc.clean(opt.textContent);
   }
 
   // destinations <from> — pick the origin, open the To menu, and return every
@@ -347,11 +289,11 @@ class Plugin {
     const input = document.getElementById("select-destination");
     if (!input) throw new Error("No destination airport field on this page");
     if (input.disabled) throw new Error("The destination field is still disabled after picking From.");
-    this.setInput(input, "");
-    this.openMenu(input);
+    await bsc.reactFill(input, "");
+    await this.openMenu(input);
     let labels = [];
     for (let i = 0; i < 20 && !labels.length; i += 1) {
-      await this.sleep(250);
+      await bsc.sleep(250);
       labels = this.menuLabels();
     }
     return { from: code, count: labels.length, destinations: labels };
@@ -364,7 +306,7 @@ class Plugin {
     const label = this.hook(`flight-search-trip-type_${want}`);
     if (!label) throw new Error("No Round Trip / One way control");
     await this.tap(label);
-    await this.sleep(250);
+    await bsc.sleep(250);
   }
 
   ordinal(n) {
@@ -380,10 +322,12 @@ class Plugin {
         : "flight-search-date-picker_expand-start-date";
     const btn = this.hook(hook);
     if (!btn) throw new Error(which === "end" ? "No return calendar button" : "No departure calendar button");
+    // The button enables once React has applied both airports.
+    await bsc.waitFor(() => !btn.disabled, 20, 250);
     if (btn.disabled) throw new Error("Calendar is disabled — pick origin and destination first.");
     if (btn.getAttribute("aria-expanded") !== "true") {
       await this.tap(btn);
-      await this.sleep(400);
+      await bsc.sleep(400);
     }
   }
 
@@ -414,13 +358,13 @@ class Plugin {
           );
         }
         await this.tap(btn);
-        await this.sleep(400);
+        await bsc.sleep(400);
         return { iso, which, label: btn.getAttribute("aria-label") };
       }
       const next = this.hook("flight-search-date-picker_navigate-next-month");
       if (!next || next.disabled) break;
       await this.tap(next);
-      await this.sleep(300);
+      await bsc.sleep(300);
     }
     throw new Error(`Could not find ${iso} in the Allegiant calendar`);
   }
@@ -430,7 +374,7 @@ class Plugin {
     const open = this.hook("flight-search-travelers-expando-button");
     if (!open) throw new Error("No Travelers control");
     await this.tap(open);
-    await this.sleep(300);
+    await bsc.sleep(300);
     const seated = () => Number(this.hook("flight-search-travelers-seated")?.textContent || 1);
     for (let i = 0; i < 12 && seated() !== n; i += 1) {
       const buttons = [...document.querySelectorAll("button")];
@@ -439,7 +383,7 @@ class Plugin {
       const btn = seated() < n ? plus : minus;
       if (!btn || btn.disabled) break;
       await this.tap(btn);
-      await this.sleep(150);
+      await bsc.sleep(150);
     }
     if (seated() !== n) throw new Error(`Could not set seated travelers to ${n}`);
   }
@@ -461,8 +405,9 @@ class Plugin {
     if (!submit) throw new Error("No Search button");
     if (submit.disabled) throw new Error("Search is still disabled — airports or dates did not stick.");
     if (this.hasOverlay()) await this.close();
+    // Deferred so this call can reply before the page navigates away.
     setTimeout(() => {
-      this.clickEl(submit);
+      bsc.reactClick(submit).catch((err) => console.error("allegiant search submit failed:", err));
     }, 50);
     return {
       from: p.from,
@@ -501,7 +446,7 @@ class Plugin {
   }
 
   textHook(root, name) {
-    return this.clean((root || document).querySelector(`[data-hook='${name}']`)?.textContent);
+    return bsc.clean((root || document).querySelector(`[data-hook='${name}']`)?.textContent);
   }
 
   parseFlight(el, index, leg) {
@@ -512,7 +457,7 @@ class Plugin {
     const price = this.textHook(el, "flight-price") || null;
     const original = this.textHook(el, "strikethrough-flight-price") || null;
     const seats = this.textHook(el, "seats-availability-text") || null;
-    const label = this.clean(el.innerText).slice(0, 200);
+    const label = bsc.clean(el.innerText).slice(0, 200);
     return {
       leg,
       index,
@@ -537,7 +482,7 @@ class Plugin {
   parseDays(leg) {
     return [...document.querySelectorAll(`[data-hook^='day-tab_${leg}_']`)].map((el) => {
       const date = (el.getAttribute("data-hook") || "").match(/(\d{4}-\d{2}-\d{2})$/)?.[1] || null;
-      const text = this.clean(el.textContent);
+      const text = bsc.clean(el.textContent);
       const no = /no flights/i.test(text);
       const price = text.match(/\$[\d,.]+/)?.[0] || null;
       const selected = el.getAttribute("aria-selected") === "true" || /TabButton.*bpTlDK/.test(el.className);
@@ -573,7 +518,7 @@ class Plugin {
       if (this.flightCards("departing").length || this.hook("flights-list_departing")) return true;
       const body = document.body?.innerText || "";
       if (/no flights/i.test(body) && this.hook("days-tabs_departing")) return true;
-      await this.sleep(400);
+      await bsc.sleep(400);
     }
     return false;
   }
@@ -588,7 +533,7 @@ class Plugin {
     if (!(await this.waitForResults())) {
       throw new Error("Timed out waiting for Allegiant flights to render. Retry results.");
     }
-    await this.sleep(400);
+    await bsc.sleep(400);
     const { departing, returning } = this.parseOffers();
     return {
       url: location.href,
@@ -607,7 +552,7 @@ class Plugin {
       throw new Error("usage: day <departing|returning> <YYYY-MM-DD>");
     }
     const side = which === "outbound" || which === "departing" ? "departing" : "returning";
-    const iso = this.toIsoDate(date);
+    const iso = bsc.dates.toIso(date);
     for (let i = 0; i < 10; i += 1) {
       const tab = this.hook(`day-tab_${side}_${iso}`);
       if (tab) {
@@ -615,13 +560,13 @@ class Plugin {
           return { date: iso, leg: side, noFlights: true, clicked: false };
         }
         await this.tap(tab);
-        await this.sleep(800);
+        await bsc.sleep(800);
         return { date: iso, leg: side, clicked: true, count: this.flightCards(side).length };
       }
       const next = this.hook(`next-arrow_${side}`);
       if (!next || next.disabled) break;
       await this.tap(next);
-      await this.sleep(400);
+      await bsc.sleep(400);
     }
     throw new Error(`No ${side} day tab for ${iso}. Use results to see which days Allegiant is showing.`);
   }
@@ -644,10 +589,10 @@ class Plugin {
       if (!el) throw new Error(`No ${side} flight ${which}. Run results.`);
     }
     el.scrollIntoView({ block: "center" });
-    await this.sleep(150);
+    await bsc.sleep(150);
     const clickable = el.querySelector("[data-hook='flight-price-box']") || el;
     await this.tap(clickable);
-    await this.sleep(800);
+    await bsc.sleep(800);
     return {
       selected: this.parseFlight(el, cards.indexOf(el), side),
       url: location.href,

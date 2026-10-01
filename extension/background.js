@@ -552,7 +552,7 @@ async function getTabOrThrow(tabId) {
   }
 }
 
-const PAGE_SCRIPT_VERSION = 23;
+const PAGE_SCRIPT_VERSION = 26;
 
 async function pageScriptVersion(tabId) {
   try {
@@ -1072,8 +1072,26 @@ async function handleCommand(message) {
   }
 }
 
+const PLUGIN_COMMANDS = new Set([
+  "page.snapshot", "page.text", "page.options", "page.click", "page.type", "page.press",
+  "page.scroll", "page.status", "page.annotate", "react.call",
+]);
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return;
+
+  // Plugins (isolated-world code) reach the core commands through this. The
+  // tab is always the sender's, and only page-level commands are allowed.
+  if (message.type === "bsc-command") {
+    const tabId = sender.tab?.id;
+    (async () => {
+      if (!PLUGIN_COMMANDS.has(message.method)) throw new Error(`Plugins may not call ${message.method}`);
+      if (tabId == null) throw new Error("No tab for this plugin call");
+      const result = await handleCommand({ method: message.method, params: { ...(message.params || {}), tabId } });
+      sendResponse({ ok: true, result: result === undefined ? null : result });
+    })().catch((err) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+    return true;
+  }
 
   if (message.type === "plugin-query") {
     (async () => {

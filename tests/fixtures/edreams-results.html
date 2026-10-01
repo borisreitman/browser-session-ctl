@@ -80,18 +80,24 @@
   </div>
 </div>
 <div id="picked"></div>
+<script src="react-shape.js"></script>
 <script>
   document.getElementById("continue-without").addEventListener("click", () => {
     document.getElementById("consent").remove();
   });
+  // The results page is a React app: handlers live in React props.
   document.querySelectorAll("[data-testid^='sorting-tab-']").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll("[data-testid^='sorting-tab-']").forEach((t) => t.setAttribute("aria-selected", "false"));
-      tab.setAttribute("aria-selected", "true");
+    reactify(tab, {
+      onClick: () => {
+        document.querySelectorAll("[data-testid^='sorting-tab-']").forEach((t) => t.setAttribute("aria-selected", "false"));
+        tab.setAttribute("aria-selected", "true");
+      },
     });
   });
-  document.getElementById("ba-plain").addEventListener("click", () => {
-    document.getElementById("picked").textContent = "selected-non-discounted";
+  reactify(document.getElementById("ba-plain"), {
+    onClick: () => {
+      document.getElementById("picked").textContent = "selected-non-discounted";
+    },
   });
 </script>
 </body>

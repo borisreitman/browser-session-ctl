@@ -48,31 +48,6 @@ class Plugin {
     };
   }
 
-  sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  fireClick(target) {
-    const rect = target.getBoundingClientRect();
-    const opts = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: rect.left + Math.max(rect.width / 2, 1),
-      clientY: rect.top + Math.max(rect.height / 2, 1),
-      button: 0,
-    };
-    target.dispatchEvent(new PointerEvent("pointerdown", opts));
-    target.dispatchEvent(new MouseEvent("mousedown", opts));
-    target.dispatchEvent(new PointerEvent("pointerup", opts));
-    target.dispatchEvent(new MouseEvent("mouseup", opts));
-    target.dispatchEvent(new MouseEvent("click", opts));
-  }
-
-  looksLikeDate(value) {
-    return /^\d{4}-\d{1,2}-\d{1,2}$/.test(value) || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value);
-  }
-
   toExpediaDate(value) {
     if (!value) return null;
     if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value)) {
@@ -117,7 +92,7 @@ class Plugin {
     for (const token of rest) {
       if (token == null || token === "") continue;
       const lower = String(token).toLowerCase();
-      if (this.looksLikeDate(token)) {
+      if (bsc.dates.looksLikeDate(token)) {
         params.returnDate = this.toExpediaDate(token);
         params.trip = "roundtrip";
         continue;
@@ -274,18 +249,6 @@ class Plugin {
     return h >= 9 && h < 17;
   }
 
-  setNativeSelect(select, visibleLabel) {
-    const wanted = String(visibleLabel).toLowerCase();
-    const option = [...select.options].find((o) => o.textContent.trim().toLowerCase() === wanted)
-      || [...select.options].find((o) => o.textContent.trim().toLowerCase().includes(wanted));
-    if (!option) throw new Error(`Sort by has no option matching "${visibleLabel}"`);
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
-    setter.call(select, option.value);
-    select.dispatchEvent(new Event("input", { bubbles: true }));
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    return option.textContent.trim();
-  }
-
   sortControl() {
     const labelled = document.querySelector('select[aria-label="Sort by"], [aria-label="Sort by"]');
     if (labelled) return labelled;
@@ -374,20 +337,20 @@ class Plugin {
     control.scrollIntoView({ block: "center", inline: "nearest" });
     let applied;
     if (control.tagName === "SELECT") {
-      applied = this.setNativeSelect(control, label);
+      applied = await bsc.reactSelect(control, label, { partial: true });
     } else {
-      this.fireClick(control);
-      await this.sleep(250);
+      bsc.fireClick(control);
+      await bsc.sleep(250);
       const opts = [...document.querySelectorAll('[role="option"], option, li')];
       const wanted = label.toLowerCase();
       const opt =
         opts.find((el) => el.textContent.trim().toLowerCase() === wanted) ||
         opts.find((el) => el.textContent.trim().toLowerCase().includes(wanted));
       if (!opt) throw new Error(`Could not find sort option "${label}"`);
-      this.fireClick(opt);
+      bsc.fireClick(opt);
       applied = opt.textContent.trim();
     }
-    await this.sleep(600);
+    await bsc.sleep(600);
     return { sort: applied, count: this.parseOffers().length };
   }
 
@@ -446,12 +409,14 @@ class Plugin {
     }
     const clickable = el.closest("label") || el.querySelector("input") || el;
     clickable.scrollIntoView({ block: "center", inline: "nearest" });
-    await this.sleep(100);
+    await bsc.sleep(100);
     const input = el.tagName === "INPUT" ? el : el.querySelector("input[type='checkbox'], input[type='radio']");
     const before = input ? input.checked : null;
-    this.fireClick(clickable);
-    if (input && !input.checked && clickable !== input) input.click();
-    await this.sleep(800);
+    if (input) {
+      await bsc.waitFor(() => !input.disabled, 40, 250);
+      await bsc.reactClick(input);
+    } else bsc.fireClick(clickable);
+    await bsc.sleep(800);
     const after = input ? input.checked : null;
     return {
       leave: when,
@@ -503,9 +468,10 @@ class Plugin {
         'Expedia is showing "Please refresh your search for the latest prices" but no "Refresh search" button was found.'
       );
     }
-    this.fireClick(btn);
+    // Plain DOM events: the stale-price overlay could not be reproduced to confirm it has a React handler.
+    bsc.fireClick(btn);
     for (let i = 0; i < 25; i += 1) {
-      await this.sleep(400);
+      await bsc.sleep(400);
       if (!this.hasStalePriceOverlay()) return { refreshed: true };
     }
     throw new Error('Clicked "Refresh search" but the stale-price overlay is still showing.');
@@ -541,7 +507,7 @@ class Plugin {
         };
       }
       if (!this.isStillLoading() && i > 2) break;
-      await this.sleep(400);
+      await bsc.sleep(400);
     }
     const kind = this.pageKind();
     if (kind !== "results") {
@@ -591,9 +557,9 @@ class Plugin {
     const want = state === undefined ? !hit[0].checked : /^(on|true|1|yes)$/i.test(String(state));
     if (hit[0].checked !== want) {
       hit[0].input.scrollIntoView({ block: "center", behavior: "instant" });
-      const target = hit[0].input.closest("label") || hit[0].input;
-      this.fireClick(target);
-      if (hit[0].input.checked !== want && typeof hit[0].input.click === "function") hit[0].input.click();
+      // Expedia disables every filter while it reloads the list.
+      await bsc.waitFor(() => !hit[0].input.disabled, 40, 250);
+      await bsc.reactClick(hit[0].input);
       await this.settle();
     }
     const key = (t) => t.replace(/\s*\(\d+\).*$/, "");
@@ -603,14 +569,14 @@ class Plugin {
 
   // Wait until the offer list stops changing (filters re-render the list async).
   async settle() {
-    await this.sleep(800);
+    await bsc.sleep(800);
     let last = "";
     let stable = 0;
     for (let i = 0; i < 30 && stable < 3; i += 1) {
       const sig = this.offerButtons().map((el) => this.offerName(el)).join("|") + (this.hasStalePriceOverlay() ? "!" : "");
       stable = sig === last ? stable + 1 : 0;
       last = sig;
-      await this.sleep(400);
+      await bsc.sleep(400);
     }
   }
 
@@ -640,10 +606,10 @@ class Plugin {
       if (!btn) break;
       const before = this.offerButtons().length;
       btn.scrollIntoView({ block: "center", behavior: "instant" });
-      this.fireClick(btn);
+      await bsc.reactClick(btn);
       let grew = false;
       for (let i = 0; i < 15; i += 1) {
-        await this.sleep(400);
+        await bsc.sleep(400);
         if (this.offerButtons().length > before) {
           grew = true;
           break;
@@ -688,13 +654,12 @@ class Plugin {
     const i = this.resolveOffer(which.join(" "), flights);
     const el = this.offerButtons()[i];
     el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
-    await this.sleep(150);
+    await bsc.sleep(150);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       if (el instanceof HTMLElement) el.focus({ preventScroll: true });
-      this.fireClick(el);
-      if (typeof el.click === "function") el.click();
+      await bsc.reactClick(el);
       for (let n = 0; n < 10; n += 1) {
-        await this.sleep(400);
+        await bsc.sleep(400);
         if (this.fareButtons().length || /returning flights/i.test(document.body?.innerText || "")) {
           return { selected: flights[i], fares: this.fareButtons().map((f) => ({ name: f.name, price: f.price })) };
         }
@@ -714,13 +679,12 @@ class Plugin {
     const hit = want ? buttons.find((b) => b.name.toLowerCase() === want) || buttons.find((b) => b.name.toLowerCase().includes(want)) : buttons[0];
     if (!hit) throw new Error(`No fare "${name}". Available: ${buttons.map((b) => `${b.name} ${b.price}`).join(", ")}`);
     hit.el.scrollIntoView({ block: "center", behavior: "instant" });
-    this.fireClick(hit.el);
-    if (typeof hit.el.click === "function") hit.el.click();
+    await bsc.reactClick(hit.el);
     for (let n = 0; n < 25; n += 1) {
-      await this.sleep(400);
+      await bsc.sleep(400);
       if (/returning flights/i.test(document.body?.innerText || "") || !this.fareButtons().length) break;
     }
-    await this.sleep(600);
+    await bsc.sleep(600);
     return {
       fare: { name: hit.name, price: hit.price },
       url: location.href,

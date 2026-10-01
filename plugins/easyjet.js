@@ -26,44 +26,6 @@ class Plugin {
     };
   }
 
-  sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  // easyJet's React widgets ignore a bare .click(); send the whole sequence.
-  fireClick(target) {
-    const rect = target.getBoundingClientRect();
-    const opts = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: rect.left + Math.max(rect.width / 2, 1),
-      clientY: rect.top + Math.max(rect.height / 2, 1),
-      button: 0,
-    };
-    target.dispatchEvent(new PointerEvent("pointerdown", opts));
-    target.dispatchEvent(new MouseEvent("mousedown", opts));
-    target.dispatchEvent(new PointerEvent("pointerup", opts));
-    target.dispatchEvent(new MouseEvent("mouseup", opts));
-    target.dispatchEvent(new MouseEvent("click", opts));
-  }
-
-  clean(s) {
-    return String(s || "").replace(/\s+/g, " ").trim();
-  }
-
-  toIsoDate(value) {
-    const us = String(value).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (us) return { y: Number(us[3]), m: Number(us[1]), d: Number(us[2]) };
-    const iso = String(value).match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if (iso) return { y: Number(iso[1]), m: Number(iso[2]), d: Number(iso[3]) };
-    throw new Error(`Unrecognized date "${value}". Use YYYY-MM-DD or MM/DD/YYYY.`);
-  }
-
-  looksLikeDate(value) {
-    return /^\d{4}-\d{1,2}-\d{1,2}$/.test(value) || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value);
-  }
-
   airport(value) {
     const code = String(value || "").trim().toUpperCase();
     if (!/^[A-Z]{3}$/.test(code)) {
@@ -74,11 +36,11 @@ class Plugin {
 
   parseSearchArgs(from, to, depart, ...rest) {
     if (!from || !to || !depart) throw new Error("usage: search <from> <to> <depart> [return] [adults]");
-    const params = { from: this.airport(from), to: this.airport(to), depart: this.toIsoDate(depart), returnDate: null, adults: 1 };
+    const params = { from: this.airport(from), to: this.airport(to), depart: bsc.dates.parse(depart), returnDate: null, adults: 1 };
     for (const token of rest) {
       if (token == null || token === "") continue;
       const lower = String(token).toLowerCase();
-      if (this.looksLikeDate(token)) params.returnDate = this.toIsoDate(token);
+      if (bsc.dates.looksLikeDate(token)) params.returnDate = bsc.dates.parse(token);
       else if (lower === "oneway" || lower === "one-way") params.returnDate = null;
       else if (/^\d+$/.test(token)) {
         params.adults = Number(token);
@@ -97,40 +59,25 @@ class Plugin {
     return Boolean(document.querySelector("[data-testid='searchpod'] #from"));
   }
 
-  setInput(el, text) {
-    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-    set.call(el, text);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  async waitFor(fn, tries = 20, ms = 250) {
-    for (let i = 0; i < tries; i += 1) {
-      const v = fn();
-      if (v) return v;
-      await this.sleep(ms);
-    }
-    return null;
-  }
-
   async pickAirport(field, code) {
     const input = document.getElementById(field);
     if (!input) throw new Error(`No "${field}" field on this page`);
     input.focus();
-    this.fireClick(input);
-    this.setInput(input, "");
-    await this.sleep(100);
-    this.setInput(input, code);
-    const item = await this.waitFor(() => document.querySelector(`[data-testid='${code}-airport-item']`), 20, 250);
+    bsc.fireClick(input);
+    bsc.fill(input, "", { change: false });
+    await bsc.sleep(100);
+    bsc.fill(input, code, { change: false });
+    const item = await bsc.waitFor(() => document.querySelector(`[data-testid='${code}-airport-item']`), 20, 250);
     if (!item) throw new Error(`easyJet has no airport ${code} in the "${field}" list`);
-    this.fireClick(item.querySelector("label") || item);
-    await this.sleep(500);
+    bsc.fireClick(item.querySelector("label") || item);
+    await bsc.sleep(500);
     if (!input.value.includes(`(${code})`)) throw new Error(`Picking ${code} in "${field}" did not stick (field says "${input.value}")`);
   }
 
   async openDates() {
     if (!document.querySelector("[data-testid='datepicker-container']")) {
-      this.fireClick(document.getElementById("when"));
-      if (!(await this.waitFor(() => document.querySelector("[data-testid='datepicker-container']")))) {
+      bsc.fireClick(document.getElementById("when"));
+      if (!(await bsc.waitFor(() => document.querySelector("[data-testid='datepicker-container']")))) {
         throw new Error("Date picker did not open");
       }
     }
@@ -142,14 +89,14 @@ class Plugin {
       const btn = document.querySelector(`[data-testid='${id}']`);
       if (btn) {
         if (btn.disabled) throw new Error(`${this.fmt(d)} is not bookable (past, or beyond easyJet's booking window)`);
-        this.fireClick(btn);
-        await this.sleep(400);
+        bsc.fireClick(btn);
+        await bsc.sleep(400);
         return;
       }
       const next = document.querySelector("[data-testid='next-nav-button']");
       if (!next || next.disabled) break;
-      this.fireClick(next);
-      await this.sleep(250);
+      bsc.fireClick(next);
+      await bsc.sleep(250);
     }
     throw new Error(`Could not find ${this.fmt(d)} in the calendar`);
   }
@@ -159,22 +106,22 @@ class Plugin {
     if (!toggle) return;
     const isReturn = toggle.getAttribute("aria-checked") === "true";
     if (isReturn !== returning) {
-      this.fireClick(toggle);
-      await this.sleep(300);
+      bsc.fireClick(toggle);
+      await bsc.sleep(300);
     }
   }
 
   async setAdults(n) {
     const who = document.getElementById("who");
-    this.fireClick(who);
-    const section = await this.waitFor(() => document.querySelector("[data-testid='adult-section']"));
+    bsc.fireClick(who);
+    const section = await bsc.waitFor(() => document.querySelector("[data-testid='adult-section']"));
     if (!section) throw new Error("Passenger picker did not open");
     const qty = () => Number(section.querySelector("[data-testid='quantity']").value);
     for (let i = 0; i < 12 && qty() !== n; i += 1) {
       const btn = section.querySelector(qty() < n ? "[data-testid='add-button']" : "[data-testid='subtract-button']");
       if (btn.disabled) break;
-      this.fireClick(btn);
-      await this.sleep(150);
+      bsc.fireClick(btn);
+      await bsc.sleep(150);
     }
     if (qty() !== n) throw new Error(`Could not set adults to ${n} (easyJet allows up to 9 seats)`);
   }
@@ -212,8 +159,8 @@ class Plugin {
       pod: this.pod(),
     };
     try {
-      this.fireClick(submit);
-      await this.sleep(1500);
+      bsc.fireClick(submit);
+      await bsc.sleep(1500);
     } finally {
       window.open = realOpen;
     }
@@ -253,7 +200,7 @@ class Plugin {
   }
 
   parseTile(tile, leg, index) {
-    const label = this.clean(tile.querySelector("[class*='FlightTile_a11yLabel']")?.textContent || tile.textContent);
+    const label = bsc.clean(tile.querySelector("[class*='FlightTile_a11yLabel']")?.textContent || tile.textContent);
     const id = tile.querySelector("[class*='FlightTile_a11yLabel']")?.id || "";
     const m = label.match(/for (.*?)\. Departure (.*?), Arrival (.*?), Price (\S+?)(?: (.*))?$/i);
     const route = id.match(/^standard-([A-Z]{3})_([A-Z]{3})_/);
@@ -275,11 +222,11 @@ class Plugin {
     if (this.pageKind() !== "results") {
       throw new Error(`This tab is not showing easyJet results (${this.pageKind()}: ${location.href}). Run search first.`);
     }
-    if (!(await this.waitFor(() => this.tiles().length, 60, 500))) {
+    if (!(await bsc.waitFor(() => this.tiles().length, 60, 500))) {
       if (/no flights available/i.test(document.body.innerText)) return { url: location.href, count: 0, flights: [] };
       throw new Error("Timed out waiting for flight tiles. Retry results.");
     }
-    await this.sleep(500);
+    await bsc.sleep(500);
     const sections = this.sections();
     const flights = [];
     (sections.length ? sections : [document]).forEach((sec, si) => {
@@ -298,9 +245,9 @@ class Plugin {
     const sec = this.sections()[want === "outbound" ? 0 : 1] || document;
     const tile = [...sec.querySelectorAll("[class*='FlightTile_flightTile__']")][Number(index)];
     tile.scrollIntoView({ block: "center" });
-    await this.sleep(150);
-    this.fireClick(tile.querySelector("button, [role='button']") || tile);
-    await this.sleep(1500);
+    await bsc.sleep(150);
+    bsc.fireClick(tile.querySelector("button, [role='button']") || tile);
+    await bsc.sleep(1500);
     return { selected: f, url: location.href };
   }
 }

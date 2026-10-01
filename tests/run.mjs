@@ -163,8 +163,8 @@ async function testLinksAndClicks(tabId) {
   );
 }
 
-async function loadRepoPlugin(namespace) {
-  const code = await readFile(new URL(`../plugins/${namespace}.js`, import.meta.url), "utf8");
+async function loadRepoPlugin(namespace, file = `../plugins/${namespace}.js`) {
+  const code = await readFile(new URL(file, import.meta.url), "utf8");
   const runtimeDir = join(dirname(fileURLToPath(import.meta.url)), "..", "extension", "runtime-plugins");
   await mkdir(runtimeDir, { recursive: true });
   await writeFile(
@@ -510,6 +510,35 @@ async function testReact(tabId) {
   try { await command("page.click", { tabId, name: "Locked" }); } catch (e) { refused = e.message; }
   check("click on a disabled control surfaces the error, no silent fallback", /disabled/.test(refused), refused);
 
+  // --- plugins get the same core methods (the `bsc` global) ---
+  await command("page.navigate", { tabId, url: fixture("react/react-app.html") });
+  await waitFor(async () => (await react("detect")).isReact, { timeout: 4000 });
+  await loadRepoPlugin("bsc-api", "fixtures/react/api-plugin.js");
+  const viaPlugin = await repoPlugin(tabId, "bsc-api", "react");
+  check("plugin: bsc.isReact on a React page", viaPlugin.isReact === true && viaPlugin.viaCall === true);
+  const ps = await state();
+  check(
+    "plugin: reactFill / reactClick / reactSelect reach React state",
+    ps.bio === "from plugin" && ps.subscribe === true && ps.color === "red" && viaPlugin.fill.via === "react" && viaPlugin.select === "Red",
+    JSON.stringify([ps, viaPlugin.fill, viaPlugin.select])
+  );
+  check("plugin: reactPress Enter submits the form", (await countText()).includes("last search:") && viaPlugin.press.called.length > 0, JSON.stringify(viaPlugin.press));
+  check("plugin: reactClick honours stopPropagation", JSON.stringify(ps.log) === '["inner"]', JSON.stringify(ps.log));
+  check("plugin: reactClick on a disabled control throws", /disabled/.test(viaPlugin.disabled || ""), viaPlugin.disabled);
+  check("plugin: reactClick with no React handler throws, no silent fallback", /No React handler/.test(viaPlugin.noHandler || ""), viaPlugin.noHandler);
+  check("plugin: bsc.react.* probe, snapshot and text from a plugin", viaPlugin.controls > 10 && viaPlugin.inspect?.name === "Counter" && viaPlugin.snapshot > 20 && viaPlugin.text === true);
+  check("plugin: only page-level commands are allowed", /may not call tabs\.close/.test(viaPlugin.blocked || ""), viaPlugin.blocked);
+
+  const nat = await repoPlugin(tabId, "bsc-api", "native");
+  const ns = await state();
+  check("plugin: plain fill / click / select / press work on the same page", ns.color === "green" && nat.selected === "Green" && (await countText()).includes("Clicks: "), JSON.stringify([ns.color, nat.selected]));
+  check(
+    "plugin: isDisplayed, waitFor, dates, clean helpers",
+    nat.displayed[0] === true && nat.displayed[1] === false && Boolean(nat.waited) && nat.waitedNone === null,
+    JSON.stringify(nat)
+  );
+  check("plugin: dates helpers", nat.date[0] === true && nat.date[1] === "2026-10-05" && nat.date[2].m === 1 && nat.clean === "a b", JSON.stringify([nat.date, nat.clean]));
+
   await command("page.navigate", { tabId, url: fixture("form.html") });
   const plain = await waitFor(async () => {
     const d = await react("detect");
@@ -523,6 +552,8 @@ async function testReact(tabId) {
   const nameBox = plainSnap.elements.find((e) => e.name === "Full name");
   const typed = await command("page.type", { tabId, ref: nameBox.ref, text: "Ada" });
   check("type on a plain page stays on DOM events", typed.engine === "dom", JSON.stringify(typed));
+  const refusal = await repoPlugin(tabId, "bsc-api", "refuse");
+  check("plugin: reactClick refuses on a page that is not React", /not React/.test(refusal.error || ""), JSON.stringify(refusal));
 }
 
 async function main() {

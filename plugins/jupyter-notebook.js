@@ -59,32 +59,11 @@ class Plugin {
     );
   }
 
-  sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  fireClick(target) {
-    const rect = target.getBoundingClientRect();
-    const opts = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: rect.left + rect.width / 2,
-      clientY: rect.top + rect.height / 2,
-      button: 0,
-    };
-    target.dispatchEvent(new PointerEvent("pointerdown", opts));
-    target.dispatchEvent(new MouseEvent("mousedown", opts));
-    target.dispatchEvent(new PointerEvent("pointerup", opts));
-    target.dispatchEvent(new MouseEvent("mouseup", opts));
-    target.dispatchEvent(new MouseEvent("click", opts));
-  }
-
   // Clicking a cell is how this UI decides which cell subsequent toolbar
   // commands apply to — same as a person clicking into it first.
   async activate(index) {
-    this.fireClick(this.cellEl(index));
-    await this.sleep(100);
+    bsc.fireClick(this.cellEl(index));
+    await bsc.sleep(100);
     const got = this.activeIndex();
     if (got !== Number(index)) {
       throw new Error(`Could not select cell ${index} (notebook reports active cell ${got})`);
@@ -97,7 +76,7 @@ class Plugin {
   runToolbarCommand(command) {
     const el = document.querySelector(`[data-command="${command}"]`);
     if (!el) throw new Error(`Toolbar command "${command}" is not available on this page`);
-    this.fireClick(el);
+    bsc.fireClick(el);
   }
 
   cells() {
@@ -125,14 +104,14 @@ class Plugin {
     document.execCommand("selectAll");
     document.execCommand("delete");
     document.execCommand("insertText", false, text);
-    await this.sleep(150);
+    await bsc.sleep(150);
     return this.get(index);
   }
 
   async run(index) {
     await this.activate(index);
     this.runToolbarCommand("notebook:run-cell-and-select-next");
-    await this.sleep(500);
+    await bsc.sleep(500);
     return this.cells()[Number(index)];
   }
 
@@ -143,22 +122,19 @@ class Plugin {
   setCellType(type) {
     const select = document.querySelector('select[aria-label="Cell type"]');
     if (!select) throw new Error('No "Cell type" selector found on this page');
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
-    setter.call(select, type);
-    select.dispatchEvent(new Event("input", { bubbles: true }));
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    bsc.select(select, type);
   }
 
   async insert(index, position = "below", type = "code") {
     await this.activate(index);
     const pos = position === "above" ? "above" : "below";
     this.runToolbarCommand(`notebook:insert-cell-${pos}`);
-    await this.sleep(150);
+    await bsc.sleep(150);
     const newIndex = pos === "below" ? Number(index) + 1 : Number(index);
     if (type === "markdown" || type === "raw") {
       await this.activate(newIndex);
       this.setCellType(type);
-      await this.sleep(150);
+      await bsc.sleep(150);
     }
     return this.cells()[newIndex];
   }
@@ -166,7 +142,7 @@ class Plugin {
   async delete(index) {
     await this.activate(index);
     this.runToolbarCommand("notebook:delete-cell");
-    await this.sleep(150);
+    await bsc.sleep(150);
     return { cellCount: document.querySelectorAll(".jp-Cell").length };
   }
 
@@ -207,23 +183,23 @@ class Plugin {
   // confirm it the same way a person would, by clicking its "Restart" button.
   async restartRunAll() {
     this.runToolbarCommand("notebook:restart-run-all");
-    await this.sleep(300);
+    await bsc.sleep(300);
     const dialog = document.querySelector(".jp-Dialog");
     if (dialog) {
       const confirmBtn = [...dialog.querySelectorAll("button")].find((b) =>
         /restart/i.test(b.textContent)
       );
       if (!confirmBtn) throw new Error('Restart confirmation dialog appeared but no "Restart" button was found');
-      this.fireClick(confirmBtn);
+      bsc.fireClick(confirmBtn);
     }
     // Running every cell (especially ones hitting a network/disk/kernel)
     // can take a while; give it real time rather than a fixed short delay.
     for (let i = 0; i < 100; i += 1) {
-      await this.sleep(300);
+      await bsc.sleep(300);
       const indicator = document.querySelector(".jp-Notebook-ExecutionIndicator");
       if (!indicator || !/busy/i.test(indicator.textContent)) break;
     }
-    await this.sleep(300);
+    await bsc.sleep(300);
     return this.cells();
   }
 }
