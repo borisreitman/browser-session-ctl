@@ -68,6 +68,18 @@ Plugins run in the extension's isolated world, which sees the page's DOM but not
 | `bsc.isReact()` | Whether the page has a React renderer (for a plugin that wants to assert it). |
 | `bsc.react.<fn>(...)` | Any function of the page-side probe: `controls`, `inspect`, `tree`, `fill`, `click`, `setHookState`, … Arguments and results are JSON. |
 
+### Angular (async, page-side probe)
+
+| Call | What it does |
+| --- | --- |
+| `bsc.angular.whenStable(timeoutMs, quietMs)` | Wait until Angular's testability registry reports every app stable. Prefer it to `sleep` on Angular sites. Resolves `{ stable: null }` when the page has no registry. |
+| `bsc.angular.detect()` | `kind` (`ivy`, `angularjs`, `dart`), version, and which hooks exist. |
+| `bsc.angular.<fn>(...)` | Any function of `extension/angular-probe.js`: `testability`, `isStable`, `globals`, `survey`, `component`, `expando`. Arguments and results are JSON. |
+
+Unlike React there is no `angularClick`: Angular binds ordinary DOM listeners, so plain `bsc.fireClick` / `bsc.fill` work. The probe exists for detection and for waiting. The `google-ads` plugin is the worked example (AngularDart, see [google-ads.md](google-ads.md)).
+
+**`bsc.click` fires two clicks** (a synthetic `click`, then `el.click()`). That is fine for most controls but double-activates things like pagers; use `bsc.fireClick` when one activation matters.
+
 ### Helpers and reads
 
 | Call | What it does |
@@ -77,7 +89,7 @@ Plugins run in the extension's isolated world, which sees the page's DOM but not
 | `bsc.isDisplayed(el, { minSize = 2 })` | Rendered, visible and at least `minSize` px each way. |
 | `bsc.dates.looksLikeDate(v)` / `.parse(v)` / `.toIso(v)` | `YYYY-MM-DD` or `MM/DD/YYYY` helpers. |
 | `bsc.status()`, `bsc.snapshot()`, `bsc.text()`, `bsc.find(name)`, `bsc.options(target)`, `bsc.scroll(dir)` | The CLI's page reads. |
-| `bsc.command(method, params)` | Escape hatch for a page-level command (`page.*`, `react.call`). Other commands are refused and the tab is always the plugin's own. |
+| `bsc.command(method, params)` | Escape hatch for a page-level command (`page.*`, `react.call`, `angular.call`). Other commands are refused and the tab is always the plugin's own. |
 
 ```js
 class Plugin {

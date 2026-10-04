@@ -47,6 +47,18 @@ The agent can snapshot, click, and read every `http(s)` tab in the profile where
 
 Do not install the extension in your everyday profile.
 
+### Several profiles, one sidecar
+
+You can install the extension in more than one Chrome profile (say one signed in to Google Ads and one for everything else) and point them all at the same sidecar. Each profile generates a stable id the first time it runs and shows up as `profile-xxxx`; rename it in the toolbar popup (**Profile name**, then **Reconnect**).
+
+```bash
+browser-session-ctl profiles                      # who is connected: id, label, connectedAt
+browser-session-ctl --profile ads tabs            # pick one by name, id, or unique prefix (-p ad)
+BROWSER_SESSION_CTL_PROFILE=ads browser-session-ctl snapshot
+```
+
+With one profile connected you can omit `--profile`. With several connected and none chosen, the command fails and lists the names rather than guessing. Raw HTTP callers pass `"profile"` in the `/command` body. Plugins are stored per profile, so `plugin-load` / `plugin-unload` only affect the profile you target.
+
 ## 3. Load the unpacked extension
 
 In the Agent profile window:
@@ -78,6 +90,8 @@ You want:
   "port": 8765
 }
 ```
+
+`profiles` lists every connected Chrome profile; `page` is included only when exactly one is connected or you pass `--profile`.
 
 If `extensionConnected` is `false`, the sidecar is not running, the extension is disabled, or you still need to reload the unpacked build.
 
@@ -142,6 +156,8 @@ Screenshot of a background `--tab` will briefly focus that tab (Chrome can only 
 
 `status` also describes the active page, including whether it is a React page; on React pages `click`, `type` and `press` automatically drive React's own handlers (see [doc/react.md](doc/react.md); `--dom` forces plain DOM events).
 
+Sites built on Angular are covered too: `browser-session-ctl angular detect` says whether a page is Angular (Ivy), AngularJS or AngularDart and which hooks it exposes, and `angular whenStable` waits for the app to settle (see [doc/google-ads.md](doc/google-ads.md)).
+
 `snapshot` lists visible controls with refs (`e1`, `e2`, …). Snapshot, act, then snapshot again. On sites you do not control the DOM changes; stale refs fail on purpose.
 
 `options` reads every choice on a dropdown from the DOM (`<select>` options, listbox items, custom menus). If the menu is closed and empty, it opens the control and slurps again.
@@ -185,6 +201,7 @@ This repo ships these in `plugins/` (auto runtime-loaded on first use, inject-lo
 - **easyjet** — search easyjet.com flights by filling its homepage form, read the flight tiles, and follow partner routes to Connections by easyJet. Writeup: [doc/easyjet.md](doc/easyjet.md).
 - **allegiant** — search allegiantair.com directly (Allegiant is not on Expedia/eDreams), then read departing/returning flights. Writeup: [doc/allegiant.md](doc/allegiant.md).
 - **google-flights** — search Google Flights, sort cheapest/best/fastest, and read the departing-flight list. Writeup: [doc/google-flights.md](doc/google-flights.md).
+- **google-ads** — Google Ads Keyword Planner: run "Discover new keywords" searches (optionally filtered by a site), then read, sort and page through the ideas as records. Read-only. Writeup: [doc/google-ads.md](doc/google-ads.md).
 - **ryanair** — search Ryanair (`/trip/flights/select`), read outbound/return cards, pick a day or fare. Writeup: [doc/ryanair.md](doc/ryanair.md).
 
 ```bash

@@ -489,21 +489,21 @@ async function activeTab() {
 // fiber expandos are visible (the isolated content-script world cannot see
 // them). react-hook.js is already there from document_start; react-probe.js is
 // injected on demand and is idempotent.
-async function reactCall(tab, fn, args) {
+async function probeCall(tab, file, global, label, fn, args) {
   await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     world: "MAIN",
-    files: ["react-probe.js"],
+    files: [file],
   });
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     world: "MAIN",
-    args: [fn, args],
-    func: async (name, callArgs) => {
+    args: [global, label, fn, args],
+    func: async (globalName, what, name, callArgs) => {
       try {
-        const api = globalThis.__bscReact;
+        const api = globalThis[globalName];
         if (typeof api?.[name] !== "function") {
-          throw new Error(`Unknown react function "${name}". Try: ${Object.keys(api || {}).join(", ")}`);
+          throw new Error(`Unknown ${what} function "${name}". Try: ${Object.keys(api || {}).join(", ")}`);
         }
         const value = await api[name](...callArgs);
         return { ok: true, value: value === undefined ? null : JSON.parse(JSON.stringify(value)) };
@@ -513,9 +513,14 @@ async function reactCall(tab, fn, args) {
     },
   });
   const payload = injection?.result;
-  if (!payload?.ok) throw new Error(payload?.error || "react call failed");
+  if (!payload?.ok) throw new Error(payload?.error || `${label} call failed`);
   return payload.value;
 }
+
+const reactCall = (tab, fn, args) => probeCall(tab, "react-probe.js", "__bscReact", "react", fn, args);
+
+// Same idea for Angular: angular-probe.js is injected on demand, idempotent.
+const angularCall = (tab, fn, args) => probeCall(tab, "angular-probe.js", "__bscAngular", "angular", fn, args);
 
 // Which engine drives click/type/press on this tab: React's own handlers when
 // the page is React (auto), or plain DOM events. params.engine can force one.
@@ -564,7 +569,7 @@ async function getTabOrThrow(tabId) {
   }
 }
 
-const PAGE_SCRIPT_VERSION = 26;
+const PAGE_SCRIPT_VERSION = 27;
 
 async function pageScriptVersion(tabId) {
   try {
@@ -1013,6 +1018,13 @@ async function handleCommand(message) {
       return value;
     }
 
+    case "angular.call": {
+      const tab = await tabById(params.tabId);
+      const value = await angularCall(tab, String(params.fn || "detect"), Array.isArray(params.args) ? params.args : []);
+      sendToPage(tab, { action: "touch" }).catch(() => {});
+      return value;
+    }
+
     case "page.status": {
       const tab = params.tabId == null ? await activeTab() : await getTabOrThrow(params.tabId);
       const base = { tabId: tab.id, url: tab.url, title: tab.title, loading: tab.status === "loading" };
@@ -1086,7 +1098,7 @@ async function handleCommand(message) {
 
 const PLUGIN_COMMANDS = new Set([
   "page.snapshot", "page.text", "page.options", "page.click", "page.type", "page.press",
-  "page.scroll", "page.status", "page.annotate", "react.call",
+  "page.scroll", "page.status", "page.annotate", "react.call", "angular.call",
 ]);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

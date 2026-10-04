@@ -44,6 +44,7 @@ Usage:
   browser-session-ctl config
   browser-session-ctl config annotate-new-tabs [on|off]
   browser-session-ctl react [detect|tree|inspect|invoke|setValue|setHookState|...] [json-or-string args...]
+  browser-session-ctl angular [detect|survey|globals|component|expando] [json-or-string args...]
   browser-session-ctl reload-extension
   browser-session-ctl plugin.<namespace> [args...]
   browser-session-ctl plugin-list
@@ -394,6 +395,14 @@ async function main(argv) {
         try { return JSON.parse(a); } catch { return a; }
       });
       printResult(await command("react.call", withTab({ fn, args }, tabId)));
+      return;
+    }
+    case "angular": {
+      const [fn = "detect", ...raw] = rest;
+      const args = raw.map((a) => {
+        try { return JSON.parse(a); } catch { return a; }
+      });
+      printResult(await command("angular.call", withTab({ fn, args }, tabId)));
       return;
     }
     case "reload-extension":

@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 26;
+  const VERSION = 27;
   if (globalThis.__bscVersion === VERSION) return;
   if (typeof globalThis.__bscDetach === "function") globalThis.__bscDetach();
 
@@ -762,6 +762,7 @@
 
   const bscTarget = (t) => (/^e\d+$/i.test(String(t)) ? { ref: String(t) } : { name: String(t) });
   const bscReactCall = (fn, ...args) => bscCommand("react.call", { fn, args });
+  const bscAngularCall = (fn, ...args) => bscCommand("angular.call", { fn, args });
 
   // react-hook.js marks <html data-bsc-react="18.3.1"> when a renderer registers.
   // Without the marker (a tab opened before the extension loaded) ask the probe.
@@ -900,6 +901,12 @@
     react: new Proxy(
       { call: bscReactCall },
       { get: (target, name) => (name in target ? target[name] : typeof name === "string" ? (...args) => bscReactCall(name, ...args) : undefined) }
+    ),
+
+    // Any function of the page's Angular probe: bsc.angular.detect(), .survey(), .component("#el") ...
+    angular: new Proxy(
+      { call: bscAngularCall },
+      { get: (target, name) => (name in target ? target[name] : typeof name === "string" ? (...args) => bscAngularCall(name, ...args) : undefined) }
     ),
 
     sleep, clean: cleanText, waitFor, isDisplayed, dates,
