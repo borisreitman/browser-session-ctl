@@ -8,3 +8,9 @@ export function port() {
 export function origin() {
   return `http://${DEFAULT_HOST}:${port()}`;
 }
+
+// Which Chrome profile to talk to when several are connected. Set by
+// --profile or BROWSER_SESSION_CTL_PROFILE; empty means "the only one".
+export function profileFromEnv() {
+  return process.env.BROWSER_SESSION_CTL_PROFILE || "";
+}

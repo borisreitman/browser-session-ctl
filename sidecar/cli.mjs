@@ -2,7 +2,7 @@
 import { writeFile, readFile, readdir, mkdir, unlink } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { origin } from "./config.mjs";
+import { origin, profileFromEnv } from "./config.mjs";
 
 // This repo's plugins/ dir — never shipped with the extension, only ever
 // handed to it at runtime via plugin.load. See PLUGINS_DIR below and
@@ -23,6 +23,7 @@ Usage:
   browser-session-ctl --tab <id> <command> ...
 
   browser-session-ctl status
+  browser-session-ctl profiles
   browser-session-ctl tabs
   browser-session-ctl active
   browser-session-ctl open [url] [--background]
@@ -54,6 +55,10 @@ Usage:
             click / type / press auto-detect React pages and drive them through
             React's own handlers (see \`status\`). These flags force plain DOM
             events or React handlers instead.
+--profile <name>
+            Which Chrome profile to drive when several are connected to the
+            sidecar (also BROWSER_SESSION_CTL_PROFILE). Optional when only one
+            is connected. \`profiles\` lists them; rename in the extension popup.
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
 
@@ -89,13 +94,15 @@ function printUsage() {
 // Set from --dom / --react: forces the engine for click/type/press. Unset means
 // auto: the extension drives React pages through React's own handlers.
 let engine;
+// Set from --profile / BROWSER_SESSION_CTL_PROFILE: which connected Chrome profile gets commands.
+let profile = profileFromEnv();
 
 async function command(method, params = {}) {
   if (engine && method.startsWith("page.")) params = { ...params, engine };
   const response = await fetch(`${origin()}/command`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ method, params }),
+    body: JSON.stringify({ method, params, profile: profile || undefined }),
   });
   const data = await response.json();
   if (!data.ok) {
@@ -121,6 +128,17 @@ function parseArgs(argv) {
       const value = arg.slice("--tab=".length);
       tabId = Number(value);
       if (!Number.isInteger(tabId) || tabId <= 0) throw new Error(`invalid --tab: ${value}`);
+      continue;
+    }
+    if (arg === "--profile" || arg === "-p") {
+      const value = argv[i + 1];
+      if (!value || value.startsWith("-")) throw new Error("--profile requires a profile name");
+      profile = value;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--profile=")) {
+      profile = arg.slice("--profile=".length);
       continue;
     }
     if (arg === "--dom" || arg === "--react") {
@@ -264,7 +282,7 @@ async function main(argv) {
     case "status": {
       const response = await fetch(`${origin()}/health`);
       const health = await response.json();
-      if (health.extensionConnected) {
+      if (health.extensionConnected && (profile || health.profiles.length === 1)) {
         try {
           health.page = await command("page.status", withTab({}, tabId));
         } catch (err) {
@@ -272,6 +290,11 @@ async function main(argv) {
         }
       }
       printResult(health);
+      return;
+    }
+    case "profiles": {
+      const health = await (await fetch(`${origin()}/health`)).json();
+      printResult(health.profiles || []);
       return;
     }
     case "tabs":

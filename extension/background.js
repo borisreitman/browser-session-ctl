@@ -21,6 +21,18 @@ async function getPort() {
   return Number(port) || DEFAULT_PORT;
 }
 
+// chrome.storage.local is per Chrome profile, so a random id stored there
+// tells the sidecar which profile this extension instance belongs to. The
+// label is what you type after --profile; it defaults to a short id.
+async function getProfile() {
+  let { profileId, profileLabel } = await chrome.storage.local.get({ profileId: "", profileLabel: "" });
+  if (!profileId) {
+    profileId = crypto.randomUUID();
+    await chrome.storage.local.set({ profileId });
+  }
+  return { id: profileId, label: profileLabel || `profile-${profileId.slice(0, 4)}` };
+}
+
 const DEFAULT_SETTINGS = { annotateNewTabs: true };
 
 async function getSettings() {
@@ -1110,9 +1122,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "popup-status") {
-    chrome.storage.local.get(null).then((state) => {
+    chrome.storage.local.get(null).then(async (state) => {
       sendResponse({
         ...state,
+        profileLabel: (await getProfile()).label,
         connected: Boolean(socket && socket.readyState === WebSocket.OPEN),
       });
     });
@@ -1122,6 +1135,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "popup-reconnect") {
     (async () => {
       if (message.port) await chrome.storage.local.set({ port: Number(message.port) });
+      if (typeof message.label === "string") {
+        await chrome.storage.local.set({ profileLabel: message.label.trim().slice(0, 40) });
+      }
       await boot();
       sendResponse({
         ok: true,
@@ -1138,7 +1154,9 @@ async function boot() {
   await pluginsReady;
   const port = await getPort();
   await chrome.storage.local.set({ port });
-  connect(`ws://127.0.0.1:${port}/extension`);
+  const profile = await getProfile();
+  const query = new URLSearchParams({ id: profile.id, label: profile.label });
+  connect(`ws://127.0.0.1:${port}/extension?${query}`);
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {

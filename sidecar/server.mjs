@@ -4,7 +4,7 @@ import { DEFAULT_HOST, port as configuredPort } from "./config.mjs";
 
 const PORT = configuredPort();
 const pending = new Map();
-let extensionSocket = null;
+const profiles = new Map(); // profile id -> { id, label, socket, connectedAt }
 
 function json(res, status, body) {
   const payload = JSON.stringify(body);
@@ -36,14 +36,43 @@ function readBody(req) {
   });
 }
 
-function sendToExtension(command, timeoutMs = 30000) {
+const isOpen = (p) => p.socket.readyState === 1;
+
+function describeProfiles() {
+  return [...profiles.values()].filter(isOpen).map((p) => ({ id: p.id, label: p.label, connectedAt: p.connectedAt }));
+}
+
+// Match by exact id, exact label, then unique label/id prefix.
+function resolveProfile(wanted) {
+  const open = [...profiles.values()].filter(isOpen);
+  const names = () => open.map((p) => p.label).join(", ");
+  if (!open.length) {
+    throw new Error(
+      "Extension not connected. Load the unpacked extension, start this sidecar, then open a normal https tab."
+    );
+  }
+  if (!wanted) {
+    if (open.length === 1) return open[0];
+    throw new Error(`Several Chrome profiles are connected (${names()}). Pick one with --profile <name>.`);
+  }
+  const w = String(wanted).toLowerCase();
+  const exact = open.filter((p) => p.id === wanted || p.label.toLowerCase() === w);
+  const hits = exact.length ? exact : open.filter((p) => p.label.toLowerCase().startsWith(w) || p.id.startsWith(wanted));
+  if (hits.length === 1) return hits[0];
+  throw new Error(
+    hits.length
+      ? `Profile "${wanted}" is ambiguous (${hits.map((p) => p.label).join(", ")}).`
+      : `No connected profile "${wanted}". Connected: ${names()}.`
+  );
+}
+
+function sendToExtension(command, wanted, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
-    if (!extensionSocket || extensionSocket.readyState !== 1) {
-      reject(
-        new Error(
-          "Extension not connected. Load the unpacked extension, start this sidecar, then open a normal https tab."
-        )
-      );
+    let profile;
+    try {
+      profile = resolveProfile(wanted);
+    } catch (err) {
+      reject(err);
       return;
     }
     const id = crypto.randomUUID();
@@ -52,6 +81,7 @@ function sendToExtension(command, timeoutMs = 30000) {
       reject(new Error("Timed out waiting for the extension"));
     }, timeoutMs);
     pending.set(id, {
+      profileId: profile.id,
       resolve: (value) => {
         clearTimeout(timer);
         resolve(value);
@@ -61,7 +91,7 @@ function sendToExtension(command, timeoutMs = 30000) {
         reject(err);
       },
     });
-    extensionSocket.send(JSON.stringify({ id, ...command }));
+    profile.socket.send(JSON.stringify({ id, ...command }));
   });
 }
 
@@ -71,7 +101,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && url.pathname === "/health") {
     json(res, 200, {
       ok: true,
-      extensionConnected: Boolean(extensionSocket && extensionSocket.readyState === 1),
+      extensionConnected: describeProfiles().length > 0,
+      profiles: describeProfiles(),
       port: PORT,
     });
     return;
@@ -84,10 +115,10 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { ok: false, error: "method is required" });
         return;
       }
-      const result = await sendToExtension({
-        method: body.method,
-        params: body.params || {},
-      });
+      const result = await sendToExtension(
+        { method: body.method, params: body.params || {} },
+        body.profile || url.searchParams.get("profile")
+      );
       json(res, result.ok ? 200 : 400, result);
     } catch (err) {
       json(res, 503, {
@@ -105,14 +136,19 @@ const wss = new WebSocketServer({ server, path: "/extension" });
 
 wss.on("connection", (socket, req) => {
   const host = req.socket.remoteAddress;
-  if (host !== "127.0.0.1" && host !== "::1" && host !== ":ffff:127.0.0.1") {
+  if (host !== "127.0.0.1" && host !== "::1" && host !== "::ffff:127.0.0.1") {
     socket.close();
     return;
   }
 
-  if (extensionSocket) extensionSocket.close();
-  extensionSocket = socket;
-  console.log("Extension connected");
+  const q = new URL(req.url, "http://localhost").searchParams;
+  const id = q.get("id") || "default";
+  const label = q.get("label") || `profile-${id.slice(0, 4)}`;
+  const previous = profiles.get(id);
+  if (previous) previous.socket.close();
+  const profile = { id, label, socket, connectedAt: Date.now() };
+  profiles.set(id, profile);
+  console.log(`Extension connected: ${label} (${id.slice(0, 8)})`);
 
   socket.on("message", (raw) => {
     let data;
@@ -122,16 +158,19 @@ wss.on("connection", (socket, req) => {
       return;
     }
     const waiter = pending.get(data.id);
-    if (!waiter) return;
+    if (!waiter || waiter.profileId !== id) return;
     pending.delete(data.id);
     waiter.resolve(data);
   });
 
   socket.on("close", () => {
-    if (extensionSocket === socket) extensionSocket = null;
-    console.log("Extension disconnected");
-    for (const [id, waiter] of pending) {
-      pending.delete(id);
+    // A reconnect from the same profile may already have replaced this socket.
+    if (profiles.get(id) !== profile) return;
+    profiles.delete(id);
+    console.log(`Extension disconnected: ${label}`);
+    for (const [reqId, waiter] of pending) {
+      if (waiter.profileId !== id) continue;
+      pending.delete(reqId);
       waiter.reject(new Error("Extension disconnected"));
     }
   });
