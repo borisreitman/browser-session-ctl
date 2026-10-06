@@ -43,6 +43,12 @@ class Plugin {
         stops: "stops <nonstop|1|2> [on|off] — sugar for facet stops.",
         airline: "airline <name> [on|off] — sugar for facet airlines.",
         arrive: "arrive <early-morning|morning|afternoon|evening> — toggle Arrival time bucket (destination local time), if the left rail has one.",
+        carsearch:
+          "carsearch <airport> <pickup-date> <dropoff-date> [pickup-time] [dropoff-time] — open Expedia rental car results (expedia.com/carsearch). Airport IATA code (LCA, PFO). Dates YYYY-MM-DD or MM/DD/YYYY. Times 10:00 or 10:30am (default 10:00). Then carResults.",
+        carResults: "carResults [max] — wait for the car list, return cars (class, model, supplier, total, perDay, passengers, transmission, freeCancellation, rating).",
+        carFacets: "carFacets — list the left-rail car filters: group, label (with count), checked.",
+        carFacet: "carFacet <label> [on|off] — set a car filter by label, e.g. carFacet van on; carFacet minivan on; carFacet automatic on.",
+        carSort: "carSort [price|rating|recommended] — set Sort by (default: price, Total price low to high).",
         status: "status — what this tab is showing: home, results, or other, plus the form values. Dismisses the stale-price overlay first.",
       },
     };
@@ -718,5 +724,169 @@ class Plugin {
       travelers: this.buttonName(/^Travelers/i),
       resultCount: flights.length,
     };
+  }
+
+  // ---- Rental cars (expedia.com/carsearch) ----------------------------
+  // `carsearch` loads the same URL the Cars form builds on Search. The
+  // pick-up place is an airport IATA code; Expedia resolves it ("PFO" ->
+  // "Paphos, Cyprus (PFO-Paphos Intl.)"). Everything after that is read
+  // from / driven on the rendered results page.
+
+  carTime(value) {
+    const m = String(value || "10:00").trim().toLowerCase().match(/^(\d{1,2})(?::?(\d{2}))?\s*(am|pm)?$/);
+    if (!m) throw new Error(`Unrecognized time "${value}". Use HH:MM (24h) or 10:30am.`);
+    let h = Number(m[1]);
+    const min = Number(m[2] || 0);
+    if (m[3]) h = (h % 12) + (m[3] === "pm" ? 12 : 0);
+    if (h > 23 || ![0, 15, 30, 45].includes(min)) throw new Error(`Time "${value}" must be on a 15-minute step.`);
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${String(h12).padStart(2, "0")}${String(min).padStart(2, "0")}${h >= 12 ? "PM" : "AM"}`;
+  }
+
+  carSearchUrl(place, pickup, dropoff, pickupTime, dropoffTime) {
+    const code = this.airport(place);
+    const d1 = this.toExpediaDate(pickup);
+    const d2 = this.toExpediaDate(dropoff);
+    const iso = (d) => {
+      const [m, day, y] = d.split("/");
+      return `${y}-${m}-${day}`;
+    };
+    const search = new URLSearchParams();
+    search.set("locn", code);
+    search.set("pickupIATACode", code);
+    search.set("d1", iso(d1));
+    search.set("d2", iso(d2));
+    search.set("date1", d1);
+    search.set("date2", d2);
+    search.set("time1", this.carTime(pickupTime));
+    search.set("time2", this.carTime(dropoffTime || pickupTime));
+    return `https://www.expedia.com/carsearch?${search.toString()}`;
+  }
+
+  carsearch(place, pickup, dropoff, pickupTime, dropoffTime) {
+    if (!place || !pickup || !dropoff) {
+      throw new Error("usage: carsearch <airport> <pickup-date> <dropoff-date> [pickup-time] [dropoff-time]");
+    }
+    const url = this.carSearchUrl(place, pickup, dropoff, pickupTime, dropoffTime);
+    setTimeout(() => location.assign(url), 50);
+    return { url };
+  }
+
+  // One element per car. The card wrapper is data-stid="lodging-card-responsive";
+  // fall back to the nearest ancestor that carries the hidden "Reserve Item, ..." label.
+  carCards() {
+    const cards = [];
+    for (const btn of document.querySelectorAll("button, a")) {
+      if ((btn.innerText || "").trim() !== "Reserve") continue;
+      let el = btn.closest('[data-stid="lodging-card-responsive"]');
+      for (let n = btn.parentElement; !el && n; n = n.parentElement) {
+        if (/Reserve Item, /.test(n.innerText || "") && (n.innerText.match(/Reserve Item, /g) || []).length === 1) el = n;
+      }
+      if (el && !cards.includes(el)) cards.push(el);
+    }
+    return cards;
+  }
+
+  parseCar(el, index) {
+    const text = (el.innerText || "").replace(/ /g, " ");
+    const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
+    const reserve = text.match(/Reserve Item, (.+?) from (.+?) at \$([\d,]+) total/);
+    const iClass = reserve ? lines.indexOf(reserve[1]) : -1;
+    return {
+      index,
+      class: reserve?.[1] || null,
+      model: iClass >= 0 ? lines[iClass + 1] : null,
+      supplier: reserve?.[2] || null,
+      total: reserve ? `$${reserve[3]}` : null,
+      perDay: text.match(/current price is (\$[\d,]+)/)?.[1] || null,
+      passengers: lines.find((l) => /^\d+$/.test(l)) || null,
+      transmission: /Automatic/i.test(text) ? "Automatic" : /Manual/i.test(text) ? "Manual" : null,
+      freeCancellation: /Free cancellation/i.test(text),
+      payAtPickup: /Pay at pick-up/i.test(text),
+      rating: text.match(/(\d+(?:\.\d)?) out of 10/)?.[1] || null,
+      reviews: text.match(/\((\d+) reviews?\)/)?.[1] || null,
+    };
+  }
+
+  async carSettle() {
+    await bsc.sleep(800);
+    let last = "";
+    let stable = 0;
+    for (let i = 0; i < 30 && stable < 3; i += 1) {
+      const sig = this.carCards().map((el) => (el.innerText || "").slice(0, 80)).join("|");
+      stable = sig && sig === last ? stable + 1 : 0;
+      last = sig;
+      await bsc.sleep(400);
+    }
+  }
+
+  async carResults(max = 20) {
+    await bsc.waitFor(() => this.carCards().length > 0, 60, 500);
+    await this.carSettle();
+    const cars = this.carCards().map((el, i) => this.parseCar(el, i));
+    const count = document.body.innerText.match(/^(\d[\d,]*)\s+cars?\b/im)?.[1] || null;
+    return {
+      url: location.href,
+      count: count ? Number(count.replace(/,/g, "")) : null,
+      loaded: cars.length,
+      cars: cars.slice(0, Number(max) || 20),
+    };
+  }
+
+  carFilterInputs() {
+    return [...document.querySelectorAll("input[type=checkbox]")]
+      .filter((i) => /^sel[A-Za-z]+-/.test(i.id))
+      .map((input) => {
+        const label = (input.closest("label") || document.querySelector(`label[for="${CSS.escape(input.id)}"]`))
+          ?.innerText.replace(/\s+/g, " ").trim() || "";
+        return { input, group: input.name, label, checked: input.checked };
+      });
+  }
+
+  carFacets() {
+    const seen = new Set();
+    const out = [];
+    for (const f of this.carFilterInputs()) {
+      const key = `${f.group}|${f.label}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ group: f.group, label: f.label, checked: f.checked });
+    }
+    return out;
+  }
+
+  // carFacet <label> [on|off], e.g. carFacet van on. Match is on the label
+  // without its trailing "(n)" count, exact first, then substring.
+  async carFacet(label, state) {
+    if (!label) throw new Error("usage: carFacet <label> [on|off]");
+    const l = String(label).toLowerCase();
+    const bare = (f) => f.label.toLowerCase().replace(/\s*\(\d+\)\s*$/, "");
+    const all = this.carFilterInputs();
+    const exact = all.filter((f) => bare(f) === l);
+    const hits = exact.length ? exact : all.filter((f) => bare(f).includes(l));
+    const distinct = new Set(hits.map((f) => `${f.group}|${bare(f)}`));
+    if (!hits.length) throw new Error(`No car filter matches "${label}". Run carFacets.`);
+    if (distinct.size > 1) throw new Error(`Ambiguous: ${[...distinct].join(", ")}. Be more specific.`);
+    // some filters appear twice (Popular + Car type); drive the first
+    const target = hits[0].input;
+    const want = state === undefined ? !target.checked : /^(on|true|1|yes)$/i.test(String(state));
+    if (target.checked !== want) {
+      target.scrollIntoView({ block: "center", behavior: "instant" });
+      await bsc.waitFor(() => !target.disabled, 40, 250);
+      await bsc.reactClick(target);
+      await this.carSettle();
+    }
+    return { group: hits[0].group, label: hits[0].label, checked: target.checked };
+  }
+
+  // carSort [price|rating|recommended]
+  async carSort(how = "price") {
+    const select = document.querySelector("select#sort-filter-dropdown-sort, select[name=sort]");
+    if (!select) throw new Error('No "Sort by" control on this page');
+    const h = String(how).toLowerCase();
+    const label = /rat/.test(h) ? "Traveler ratings" : /rec/.test(h) ? "Recommended" : "Total price";
+    await bsc.reactSelect(select, label, { partial: true });
+    await this.carSettle();
+    return { sort: label };
   }
 }

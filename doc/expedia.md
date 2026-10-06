@@ -128,3 +128,24 @@ Clicks the same button `results` indexed, then **Select Economy Light** (or Cont
 - Airports Expedia does not sell (for example some Haifa / HFA hops) come back as no matching options — that is the site, not the plugin.
 - `search` does not wait for the SPA to finish; `results` does. Sidecar commands themselves still have a timeout, so a very slow results page can fail once — retry `results`.
 - Plugin instances die when the page unloads (`search` navigates). That is expected; the next command constructs a new instance on the results document.
+
+## Rental cars
+
+Same plugin, `expedia.com/carsearch`. `carsearch` loads the URL the Cars form builds on Search; the pick-up place is an airport IATA code and Expedia resolves it (`LCA` becomes Larnaca, Cyprus). Drop-off is the same place.
+
+```bash
+browser-session-ctl --tab <id> plugin.expedia carsearch LCA 2026-10-23 2026-10-28 10:30am
+browser-session-ctl --tab <id> plugin.expedia carFacet van on
+browser-session-ctl --tab <id> plugin.expedia carSort price
+browser-session-ctl --tab <id> plugin.expedia carResults 20
+```
+
+| Method | What it does |
+| --- | --- |
+| `carsearch <airport> <pickup> <dropoff> [pickup-time] [dropoff-time]` | Navigate to the car results. Times `10:00` or `10:30am`, 15-minute steps, default 10:00. |
+| `carResults [max]` | Wait for the list, return `count` (Expedia's total), `loaded` (cards in the DOM) and cars: class, model, supplier, total, perDay, passengers, transmission, freeCancellation, rating. |
+| `carFacets` | List the left-rail filters (group, label with count, checked). |
+| `carFacet <label> [on\|off]` | Set a filter by label, e.g. `van`, `minivan`, `automatic`, `free cancellation`. |
+| `carSort [price\|rating\|recommended]` | Set Sort by. Default price (Total price, low to high). |
+
+The list loads lazily, so `loaded` can be smaller than `count`.
