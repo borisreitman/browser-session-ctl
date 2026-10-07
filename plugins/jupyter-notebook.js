@@ -22,8 +22,12 @@ class Plugin {
         help: "Show this message.",
         cells: "List every cell: index, type, and source.",
         get: "get <index> — return one cell's source.",
-        set: "set <index> <text...> — replace one cell's source.",
-        run: "run <index> — execute one cell (like Shift+Enter).",
+        set: "set <index> <text...> — replace one cell's source (works on rendered markdown cells too). For multi-line text pass @- (stdin) or @file:<path> as the text.",
+        run: "run <index> — execute one cell (like Shift+Enter). Returns after ~0.5s; the cell may still be running.",
+        output:
+          "output <index> — structured outputs of one cell: executionCount (null while running, '*'), and a list of items: {type: 'table', columns, rows} for rendered DataFrames, {type: 'text', text} for streams/plain results, {type: 'error', text}, {type: 'image', mime, bytes}, {type: 'html', text} otherwise.",
+        runWait:
+          "runWait <index> [timeoutSeconds=60] — run one cell, wait until it finishes, and return its output (same shape as `output`).",
         insert:
           "insert <index> [above|below] [code|markdown|raw] — insert a new cell relative to <index> (default: below, code).",
         delete: "delete <index> — delete one cell.",
@@ -94,7 +98,15 @@ class Plugin {
   async set(index, ...textParts) {
     const text = textParts.join(" ");
     await this.activate(index);
-    const cm = this.cellEl(index).querySelector(".cm-content");
+    const cellEl = this.cellEl(index);
+    // A rendered markdown cell keeps a hidden editor, so typing into it silently does nothing. A
+    // double-click is how a person opens it for editing; run it afterwards to render it again.
+    const wasRendered = this.cellType(cellEl) === "markdown" && cellEl.classList.contains("jp-mod-rendered");
+    if (wasRendered) {
+      cellEl.querySelector(".jp-RenderedMarkdown")?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      await bsc.sleep(200);
+    }
+    const cm = cellEl.querySelector(".cm-content");
     if (!cm) throw new Error(`Cell ${index} has no editor to type into`);
     cm.focus();
     // CodeMirror 6 is a contenteditable div that listens for real browser
@@ -105,7 +117,64 @@ class Plugin {
     document.execCommand("delete");
     document.execCommand("insertText", false, text);
     await bsc.sleep(150);
+    if (wasRendered) await this.renderMarkdown(index);
     return this.get(index);
+  }
+
+  // "Run" on a markdown cell renders it, but run-and-select-next adds a cell when this is the last one.
+  async renderMarkdown(index) {
+    const before = document.querySelectorAll(".jp-Cell").length;
+    await this.activate(index);
+    this.runToolbarCommand("notebook:run-cell-and-select-next");
+    await bsc.sleep(300);
+    if (document.querySelectorAll(".jp-Cell").length > before) {
+      await this.activate(before);
+      this.runToolbarCommand("notebook:delete-cell");
+      await bsc.sleep(150);
+    }
+  }
+
+  // Structured view of a cell's rendered output so callers don't need screenshots. A rendered pandas
+  // DataFrame is an HTML <table>: header cells in <thead>, and in each body row the index <th> followed by
+  // <td>s. Note pandas itself truncates long frames (display.max_rows) before they ever reach the DOM.
+  output(index) {
+    const cellEl = this.cellEl(index);
+    const prompt = cellEl.querySelector(".jp-InputPrompt")?.textContent?.match(/\[(.*?)\]/)?.[1] ?? null;
+    const running = prompt === "*";
+    const items = [];
+    const text = (el) => el.textContent.replace(/\u00a0/g, " ").trim();
+    for (const out of cellEl.querySelectorAll(".jp-OutputArea-output")) {
+      const table = out.querySelector("table");
+      if (table) {
+        const headRows = [...table.querySelectorAll("thead tr")].map((tr) => [...tr.children].map(text));
+        const columns = headRows.length ? headRows[headRows.length - 1] : [];
+        const rows = [...table.querySelectorAll("tbody tr")].map((tr) => [...tr.children].map(text));
+        items.push({ type: "table", columns, rows });
+        continue;
+      }
+      const mime = out.getAttribute("data-mime-type") || "";
+      if (/application\/vnd\.jupyter\.stderr/.test(mime) || out.closest(".jp-OutputArea-child")?.querySelector(".jp-RenderedText[data-mime-type*='error']")) {
+        items.push({ type: "error", text: text(out) });
+      } else if (out.querySelector("img")) {
+        const img = out.querySelector("img");
+        items.push({ type: "image", mime: mime || "image", bytes: (img.getAttribute("src") || "").length });
+      } else if (out.querySelector("pre") || /text\/plain|stdout|stderr/.test(mime)) {
+        items.push({ type: "text", text: out.querySelector("pre")?.textContent ?? text(out) });
+      } else {
+        items.push({ type: "html", text: text(out).slice(0, 2000) });
+      }
+    }
+    return { index: Number(index), executionCount: prompt, running, outputs: items };
+  }
+
+  async runWait(index, timeoutSeconds = 60) {
+    await this.run(index);
+    const deadline = Date.now() + Number(timeoutSeconds) * 1000;
+    while (Date.now() < deadline) {
+      if (!this.output(index).running) return this.output(index);
+      await bsc.sleep(300);
+    }
+    throw new Error(`Cell ${index} still running after ${timeoutSeconds}s`);
   }
 
   async run(index) {
