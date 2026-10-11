@@ -203,6 +203,7 @@ This repo ships these in `plugins/` (auto runtime-loaded on first use, inject-lo
 - **google-flights** — search Google Flights, sort cheapest/best/fastest, and read the departing-flight list. Writeup: [doc/google-flights.md](doc/google-flights.md).
 - **google-ads** — Google Ads Keyword Planner: run "Discover new keywords" searches (optionally filtered by a site), then read, sort and page through the ideas as records. Read-only. Writeup: [doc/google-ads.md](doc/google-ads.md).
 - **ryanair** — search Ryanair (`/trip/flights/select`), read outbound/return cards, pick a day or fare. Writeup: [doc/ryanair.md](doc/ryanair.md).
+- **kayak** — search Kayak rental cars by airport and dates, filter by car class, read every car with each booking site's total. Writeup: [doc/kayak.md](doc/kayak.md).
 
 ```bash
 browser-session-ctl plugin.<namespace> <method> [args...]
