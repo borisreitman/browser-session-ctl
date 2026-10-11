@@ -778,7 +778,7 @@ class Plugin {
     const cards = [];
     for (const btn of document.querySelectorAll("button, a")) {
       if ((btn.innerText || "").trim() !== "Reserve") continue;
-      let el = btn.closest('[data-stid="lodging-card-responsive"]');
+      let el = btn.closest('[data-stid="car-offer-card"], [data-stid="lodging-card-responsive"]');
       for (let n = btn.parentElement; !el && n; n = n.parentElement) {
         if (/Reserve Item, /.test(n.innerText || "") && (n.innerText.match(/Reserve Item, /g) || []).length === 1) el = n;
       }
@@ -788,23 +788,26 @@ class Plugin {
   }
 
   parseCar(el, index) {
-    const text = (el.innerText || "").replace(/ /g, " ");
+    const text = (el.innerText || "").replace(/\u00a0/g, " ");
     const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
+    // Layout A has a hidden "Reserve Item, <class> from <supplier> at $N total" label;
+    // layout B only has the visible lines and a supplier logo (alt text).
     const reserve = text.match(/Reserve Item, (.+?) from (.+?) at \$([\d,]+) total/);
-    const iClass = reserve ? lines.indexOf(reserve[1]) : -1;
+    const total = reserve ? reserve[3] : text.match(/\$([\d,]+)\s*total/)?.[1];
+    const logo = [...el.querySelectorAll("img[alt]")].map((i) => i.alt.trim()).find((a) => a && !/car|vehicle/i.test(a));
     return {
       index,
-      class: reserve?.[1] || null,
-      model: iClass >= 0 ? lines[iClass + 1] : null,
-      supplier: reserve?.[2] || null,
-      total: reserve ? `$${reserve[3]}` : null,
-      perDay: text.match(/current price is (\$[\d,]+)/)?.[1] || null,
+      class: reserve?.[1] || lines[0] || null,
+      model: reserve ? lines[lines.indexOf(reserve[1]) + 1] || null : lines[1] || null,
+      supplier: reserve?.[2] || logo || null,
+      total: total ? `$${total}` : null,
+      perDay: text.match(/current price is (\$[\d,]+)/)?.[1] || lines.find((l) => /^\$[\d,]+$/.test(l)) || null,
       passengers: lines.find((l) => /^\d+$/.test(l)) || null,
       transmission: /Automatic/i.test(text) ? "Automatic" : /Manual/i.test(text) ? "Manual" : null,
       freeCancellation: /Free cancellation/i.test(text),
       payAtPickup: /Pay at pick-up/i.test(text),
-      rating: text.match(/(\d+(?:\.\d)?) out of 10/)?.[1] || null,
-      reviews: text.match(/\((\d+) reviews?\)/)?.[1] || null,
+      rating: text.match(/(\d+(?:\.\d)?) out of 10/)?.[1] || lines.find((l, i) => /^\d+\.\d$/.test(l) && /reviews?/i.test(lines[i + 2] || lines[i + 1] || ""))  || null,
+      reviews: text.match(/\((\d+) reviews?\)/)?.[1] || text.match(/(\d+) reviews?/)?.[1] || null,
     };
   }
 
@@ -835,11 +838,13 @@ class Plugin {
 
   carFilterInputs() {
     return [...document.querySelectorAll("input[type=checkbox]")]
-      .filter((i) => /^sel[A-Za-z]+-/.test(i.id))
+      .filter((i) => i.id && !i.closest("form, [role=search]"))
       .map((input) => {
+        // Two layouts: ids like "selCC-van-«r1i»" with "Van (33)" labels, or plain ids
+        // ("van") with "Van cars from $456" labels (some hidden, then the id is the label).
         const label = (input.closest("label") || document.querySelector(`label[for="${CSS.escape(input.id)}"]`))
-          ?.innerText.replace(/\s+/g, " ").trim() || "";
-        return { input, group: input.name, label, checked: input.checked };
+          ?.innerText.replace(/\s+/g, " ").trim() || input.id;
+        return { input, id: input.id, group: input.name, label, checked: input.checked };
       });
   }
 
@@ -860,7 +865,7 @@ class Plugin {
   async carFacet(label, state) {
     if (!label) throw new Error("usage: carFacet <label> [on|off]");
     const l = String(label).toLowerCase();
-    const bare = (f) => f.label.toLowerCase().replace(/\s*\(\d+\)\s*$/, "");
+    const bare = (f) => f.label.toLowerCase().replace(/\s*\(\d+\)\s*$/, "").replace(/\s+cars? from \$[\d,]+$/, "");
     const all = this.carFilterInputs();
     const exact = all.filter((f) => bare(f) === l);
     const hits = exact.length ? exact : all.filter((f) => bare(f).includes(l));
@@ -881,7 +886,7 @@ class Plugin {
 
   // carSort [price|rating|recommended]
   async carSort(how = "price") {
-    const select = document.querySelector("select#sort-filter-dropdown-sort, select[name=sort]");
+    const select = document.querySelector("select#sort-filter-dropdown-sort, select#cars-sort-dropdown, select[name=sort]");
     if (!select) throw new Error('No "Sort by" control on this page');
     const h = String(how).toLowerCase();
     const label = /rat/.test(h) ? "Traveler ratings" : /rec/.test(h) ? "Recommended" : "Total price";
