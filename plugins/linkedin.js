@@ -30,6 +30,8 @@ class Plugin {
           "page <list|select|current> — Pages you administer. list reads them from the Me menu ({id, name}); select <name-or-id> remembers one for this tab (sessionStorage) and opens its admin dashboard; current shows the selection.",
         post:
           "post <open|draft|status> — post as the selected Page. open navigates to its composer; draft <text...> types the text into the open composer and stops (it does NOT click Post); status shows who the composer posts as and its current text.",
+        connections:
+          "connections <go|list> — your own 1st-degree connections. go navigates this tab to the connections page (page unloads); list [--limit N] [--seconds S] scrolls the lazy list (foreground tab; ~20s per call, repeat until complete is true) and returns {total, count, complete, connections:[{name, headline, connected, url}]}.",
         status: "status — what page this is: url, whether it is a people search, signed in, result count.",
       },
     };
@@ -47,7 +49,7 @@ class Plugin {
   parseArgs(args) {
     const flags = {};
     const words = [];
-    const known = new Set(["title", "company", "school", "first", "last", "network", "page", "limit"]);
+    const known = new Set(["title", "company", "school", "first", "last", "network", "page", "limit", "seconds"]);
     for (let i = 0; i < args.length; i += 1) {
       const a = String(args[i]);
       if (a.startsWith("--") && known.has(a.slice(2))) {
@@ -225,19 +227,24 @@ class Plugin {
     if (!ed) throw new Error('Composer is not open; run "post open" first');
     const actor = this.composerActor();
     if (actor !== page.name) throw new Error(`Composer posts as "${actor}", not the selected page "${page.name}"; run "post open"`);
-    ed.focus();
-    // selectAll is ignored by the editor; an explicit Range works.
-    const range = document.createRange();
-    range.selectNodeContents(ed);
-    getSelection().removeAllRanges();
-    getSelection().addRange(range);
-    document.execCommand("delete");
-    text.split("\n").forEach((line, i) => {
-      if (i) document.execCommand("insertParagraph");
-      if (line) document.execCommand("insertText", false, line);
-    });
-    await bsc.sleep(300);
-    return { page, postingAs: actor, text: this.editorText(ed), published: false };
+    const want = text.trim();
+    // The editor has been seen to keep only the first paragraph, so verify and retry once.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      ed.focus();
+      // selectAll is ignored by the editor; an explicit Range works.
+      const range = document.createRange();
+      range.selectNodeContents(ed);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      document.execCommand("delete");
+      text.split("\n").forEach((line, i) => {
+        if (i) document.execCommand("insertParagraph");
+        if (line) document.execCommand("insertText", false, line);
+      });
+      await bsc.sleep(300);
+      if (this.editorText(ed) === want) return { page, postingAs: actor, text: this.editorText(ed), published: false };
+    }
+    throw new Error(`Draft did not match the requested text; editor holds: ${JSON.stringify(this.editorText(ed))}`);
   }
 
   isPeopleSearch() {
@@ -314,5 +321,77 @@ class Plugin {
     let people = this.cards().map((c) => this.parseCard(c));
     if (flags.limit) people = people.slice(0, Number(flags.limit));
     return { page: this.status().page, count: people.length, people };
+  }
+
+  // ---- Your own connections -----------------------------------------------
+
+  // plugin.linkedin connections <go|list> ...
+  async connections(action, ...args) {
+    if (action === "go") return this.connectionsGo();
+    if (action === "list") return this.connectionsList(...args);
+    throw new Error(`connections needs a subcommand: go, list (got ${action || "none"})`);
+  }
+
+  connectionsGo() {
+    const url = "https://www.linkedin.com/mynetwork/invite-connect/connections/";
+    setTimeout(() => location.assign(url), 50);
+    return { navigating: true, url };
+  }
+
+  // One entry per "Connected on <date>" line: climb to the nearest ancestor that holds the /in/ link.
+  connectionRows() {
+    const rows = [];
+    const seen = new Set();
+    for (const el of document.querySelectorAll("p, span")) {
+      const m = this.clean(el.textContent).match(/^Connected on (.+)$/);
+      if (!m || el.querySelector("p, span")) continue;
+      let card = el.parentElement;
+      while (card && !card.querySelector('a[href*="/in/"]')) card = card.parentElement;
+      if (!card) continue;
+      const link = card.querySelector('a[href*="/in/"]');
+      const u = new URL(link.href);
+      const url = `${u.origin}${u.pathname}`;
+      if (seen.has(url)) continue;
+      seen.add(url);
+      const lines = [...card.querySelectorAll("p")]
+        .map((p) => this.clean(p.textContent))
+        .filter((t) => t && !/^Connected on /.test(t) && t !== "Message");
+      rows.push({ name: lines[0] || null, headline: lines[1] || null, connected: m[1], url, el });
+    }
+    return rows;
+  }
+
+  connectionsTotal() {
+    const m = document.body.innerText.match(/([\d,]+)\s+connections\b/);
+    return m ? Number(m[1].replace(/,/g, "")) : null;
+  }
+
+  // plugin.linkedin connections list [--limit N] [--seconds S] — scrolls the lazy list until every connection is
+  // loaded or the time budget (default 20s, the extension gives up on a call after ~30s) runs out. Loaded cards stay
+  // in the page, so run it again until "complete" is true. Needs a foreground tab: LinkedIn loads more on scroll.
+  async connectionsList(...args) {
+    if (!location.pathname.startsWith("/mynetwork/invite-connect/connections")) {
+      throw new Error('Not on the connections page; run "connections go" first');
+    }
+    const { flags } = this.parseArgs(args);
+    const limit = flags.limit ? Number(flags.limit) : Infinity;
+    const total = this.connectionsTotal();
+    let rows = (await bsc.waitFor(() => (this.connectionRows().length ? this.connectionRows() : null), 40, 250)) || [];
+    const deadline = Date.now() + 1000 * Number(flags.seconds || 20);
+    let stalls = 0;
+    while (rows.length < Math.min(limit, total || Infinity) && stalls < 4 && Date.now() < deadline) {
+      const last = rows[rows.length - 1];
+      if (last) last.el.scrollIntoView({ block: "end" });
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      const more = [...document.querySelectorAll("button")].find((b) => /^Show more results$/i.test(this.clean(b.textContent)));
+      if (more) bsc.fireClick(more);
+      await this.sleep(1200);
+      const next = this.connectionRows();
+      stalls = next.length > rows.length ? 0 : stalls + 1;
+      rows = next;
+    }
+    const connections = rows.slice(0, limit).map(({ el, ...rest }) => rest);
+    const lines = [...document.querySelectorAll("p, span")].filter((e) => !e.querySelector("p, span") && /^Connected on /.test(this.clean(e.textContent))).length;
+    return { total, count: connections.length, connectedOnLines: lines, complete: total ? connections.length >= total : null, connections };
   }
 }
