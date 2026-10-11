@@ -205,6 +205,9 @@ This repo ships these in `plugins/` (auto runtime-loaded on first use, inject-lo
 - **ryanair** — search Ryanair (`/trip/flights/select`), read outbound/return cards, pick a day or fare. Writeup: [doc/ryanair.md](doc/ryanair.md).
 - **kayak** — search Kayak rental cars by airport and dates, filter by car class, read every car with each booking site's total. Writeup: [doc/kayak.md](doc/kayak.md).
 - **linkedin** — search LinkedIn people (name, degree, headline, location, mutual connections), and select a Page you administer to draft a post as it. Never publishes. Writeup: [doc/linkedin.md](doc/linkedin.md).
+- **notion** — search Notion pages from the "Search or ask" box, open a result, and read a page's comments. Writeup: [doc/notion.md](doc/notion.md).
+- **dollar** — dollar.com helpers: dismiss the email opt-in popup, read Locations search results. Writeup: [doc/dollar.md](doc/dollar.md).
+- **egged** — plan Israeli bus trips with Egged's journey planner (geocode places, search, read itineraries). Writeup: [doc/egged.md](doc/egged.md).
 
 ```bash
 browser-session-ctl plugin.<namespace> <method> [args...]

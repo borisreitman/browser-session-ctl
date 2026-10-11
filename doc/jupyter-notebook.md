@@ -22,6 +22,8 @@ There is no public `window.Jupyter` API in this UI. Every action clicks the real
 | `run <index>` | Execute that cell (toolbar: run cell and select next). |
 | `insert <index> [above\|below] [code\|markdown\|raw]` | New cell relative to `<index>`. Defaults: below, code. |
 | `delete <index>` | Delete that cell. |
+| `output <index>` | Structured outputs of one cell: `executionCount` (`*` while running), `running`, and `outputs[]` items: `table` (`columns`, `rows` for rendered DataFrames), `text`, `error`, `image` (`mime`, `bytes`), or `html`. pandas truncates long frames before they reach the DOM. |
+| `runWait <index> [timeoutSeconds=60]` | Run one cell, wait until it finishes, and return its `output`. Errors if still running at the timeout. |
 | `restartRunAll` | Restart the kernel and run every cell. Clicks **Restart** on the confirmation dialog. |
 | `status` | Notebook path, cell count, and the kernel session (name, language, execution state). |
 
