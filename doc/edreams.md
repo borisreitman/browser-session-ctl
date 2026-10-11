@@ -39,3 +39,25 @@ Captured DOM fixtures live in `tests/fixtures/edreams-*.html` (nested itinerary 
 - `results` returns the cards eDreams has rendered so far (often 5), not the full "N of 1000 flights match" count; `matching` reports that total.
 - `price` is the regular fare. `prime` is true when the card shows a Prime fare; `primePrice` is that member price.
 - Filters and sort reset when the page reloads (including a new `search`).
+
+## Rental cars
+
+eDreams car rental is a separate engine, `rentacar.edreams.net` (CarTrawler). It has no results URL you can build (the pick-up place is an internal id), so `carsearch` drives its AngularJS form: type the place, pick the single suggestion, click the date cells and time options, press Search Cars.
+
+```bash
+browser-session-ctl --tab <id> plugin.edreams carsearch Larnaca 2026-10-22 2026-10-28 11:00pm 4:00am
+browser-session-ctl --tab <id> plugin.edreams carCategories
+browser-session-ctl --tab <id> plugin.edreams carCategory 7seatcarrier
+browser-session-ctl --tab <id> plugin.edreams carSort price
+browser-session-ctl --tab <id> plugin.edreams carResults 12
+```
+
+| Method | What it does |
+| --- | --- |
+| `carsearch <place> <pickup> <dropoff> [pickup-time] [dropoff-time]` | Fill the form and search. `place` is typed into the location box (`Larnaca`, `LCA`, `Paphos`). Dates `YYYY-MM-DD`, times `23:00` or `11:00pm` on a 30-minute step. If the tab is not on the car form it navigates there; run it again once the form has loaded. |
+| `carResults [max]` | Wait for the list; return `count` (all cars), `loaded` (cards in the DOM, lazy) and cars: class, model, supplier, price, days, seats, bags, doors, transmission, freeCancellation, pickup. |
+| `carCategories` | The category tiles with seats, bags and from-price. Minivan tiles are `5seatcarrier`, `7seatcarrier`, `9seatcarrier` and `minivan`. |
+| `carCategory <id\|name>` | Click a tile; click again to clear. |
+| `carSort [recommended\|price\|rating]` | Set Sort by (default price). |
+
+Every eDreams car comes with free cancellation up to 48 hours before pick-up. The form remembers its last dates and times, so `carsearch` skips a date that is already set.

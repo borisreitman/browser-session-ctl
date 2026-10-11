@@ -34,6 +34,12 @@ class Plugin {
         select: "select <index> — click the price button of one itinerary (0-based). Does not change sort.",
         close: "close — dismiss the cookie-consent modal (Continue without agreeing) and the Prime 'I understand' overlay. No-op if neither is showing. Every other method that touches the page does this first.",
         status: "status — what this tab is showing (home, results, other), sort, and result count.",
+        carsearch:
+          "carsearch <place> <pickup-date> <dropoff-date> [pickup-time] [dropoff-time] — fill the rentacar.edreams.net form and search. place: text typed into the location box (LCA, Larnaca, Paphos). Dates YYYY-MM-DD. Times like 23:00 or 11:00pm (30-minute steps, default 10:00). Run it on any tab: if the tab is not on the car form it navigates there and you run it again.",
+        carResults: "carResults [max] — wait for the car list, return cars (class, model, price, days, seats, bags, transmission, freeCancellation, pickup) in the current sort order.",
+        carCategories: "carCategories — list the category tiles (Mini, Economy, ..., Minivan) with seats, bags, and from-price.",
+        carCategory: "carCategory <name> — click a category tile (e.g. carCategory minivan). Click it again to clear.",
+        carSort: "carSort [recommended|price|rating] — set Sort by (default price, low to high).",
       },
     };
   }
@@ -468,5 +474,171 @@ class Plugin {
       resultCount: this.itineraries().length,
       airlines: this.airlines().filter((a) => a.checked).length,
     };
+  }
+
+  // ---- Rental cars (rentacar.edreams.net, a CarTrawler engine) ---------
+  // The engine has no results URL we can build (the pick-up place is an
+  // internal id), so `carsearch` drives its AngularJS form: type the place,
+  // pick the suggestion, click the date cells (#day-YYYYMMDD) and the time
+  // options (the <a> inside each <li>), then Search Cars.
+
+  carTimeLabel(value) {
+    const m = String(value || "10:00").trim().toLowerCase().match(/^(\d{1,2})(?::?(\d{2}))?\s*(am|pm)?$/);
+    if (!m) throw new Error(`Unrecognized time "${value}". Use 23:00 or 11:00pm.`);
+    let h = Number(m[1]);
+    const min = Number(m[2] || 0);
+    if (m[3]) h = (h % 12) + (m[3] === "pm" ? 12 : 0);
+    if (h > 23 || ![0, 30].includes(min)) throw new Error(`Time "${value}" must be on a 30-minute step.`);
+    return `${h % 12 === 0 ? 12 : h % 12}:${String(min).padStart(2, "0")} ${h >= 12 ? "pm" : "am"}`;
+  }
+
+  carYmd(value) {
+    const iso = String(value || "").match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (!iso) throw new Error(`Unrecognized date "${value}". Use YYYY-MM-DD.`);
+    return `${iso[1]}${iso[2].padStart(2, "0")}${iso[3].padStart(2, "0")}`;
+  }
+
+  onCarForm() {
+    return location.host === "rentacar.edreams.net" && !!document.getElementById("pickupLocation") && !!document.getElementById("pickupDate");
+  }
+
+  async carPickDay(inputId, ymd) {
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const shown = `${Number(ymd.slice(6))} ${months[Number(ymd.slice(4, 6)) - 1]} ${ymd.slice(0, 4)}`;
+    // the form remembers its last values; nothing to do when already right
+    if (document.getElementById(inputId)?.value.trim() === shown) return;
+    const wrap = document.getElementById(inputId)?.closest(".ct-dynamic-calendar__input-cont");
+    if (!wrap) throw new Error(`No calendar for #${inputId}`);
+    wrap.click();
+    // the calendar shows two months; step forward until the cell exists
+    for (let i = 0; i < 12 && !document.getElementById(`day-${ymd}`); i += 1) {
+      const next = document.querySelector("[class*=calendar] [class*=next], [class*=calendar] [aria-label*=ext]");
+      if (!next) break;
+      next.click();
+      await bsc.sleep(250);
+    }
+    const cell = await bsc.waitFor(() => document.getElementById(`day-${ymd}`), 20, 150);
+    if (!cell) throw new Error(`Date ${ymd} is not selectable`);
+    cell.click();
+    await bsc.sleep(400);
+  }
+
+  async carPickTime(which, label) {
+    const ul = document.querySelectorAll("ul.ct-timepicker-custom-box")[which === "pickup" ? 0 : 1];
+    const li = ul && [...ul.querySelectorAll("li")].find((l) => l.textContent.trim().toLowerCase() === label);
+    if (!li) throw new Error(`No ${which} time option "${label}"`);
+    (li.querySelector("a") || li).click();
+    await bsc.sleep(400);
+  }
+
+  async carsearch(place, pickup, dropoff, pickupTime, dropoffTime) {
+    if (!place || !pickup || !dropoff) {
+      throw new Error("usage: carsearch <place> <pickup-date> <dropoff-date> [pickup-time] [dropoff-time]");
+    }
+    const d1 = this.carYmd(pickup);
+    const d2 = this.carYmd(dropoff);
+    const t1 = this.carTimeLabel(pickupTime);
+    const t2 = this.carTimeLabel(dropoffTime || pickupTime);
+    if (!this.onCarForm()) {
+      const url = "https://rentacar.edreams.net/en-US/?clientId=313381&currency=USD#/searchcars";
+      setTimeout(() => location.assign(url), 50);
+      return { navigated: true, url, hint: "run carsearch again once the form has loaded" };
+    }
+    // location: type, nudge the typeahead, pick the airport suggestion
+    const input = document.getElementById("pickupLocation");
+    bsc.click(input);
+    bsc.fill(input, String(place), { clear: true, typing: true });
+    bsc.click(input);
+    bsc.press(input, "a");
+    const wanted = String(place).toLowerCase();
+    const opt = await bsc.waitFor(() => {
+      // single suggestions are <li>s; the "Airport ..." / "City / area ..." group wrappers are not
+      const opts = [...document.querySelectorAll("li, [role=option]")].filter(
+        (o) => o.getBoundingClientRect().width > 0 && !o.closest("ul.ct-timepicker-custom-box") && !o.querySelector("li, [role=option]") && !/^(Airport|City \/ area)\s/.test(o.textContent.trim())
+      );
+      return opts.find((o) => /airport/i.test(o.textContent) && o.textContent.toLowerCase().includes(wanted)) || opts.find((o) => o.textContent.toLowerCase().includes(wanted));
+    }, 30, 250);
+    if (!opt) throw new Error(`No location suggestion for "${place}"`);
+    const chosen = opt.textContent.replace(/\s+/g, " ").trim();
+    (opt.querySelector("a") || opt).click();
+    await bsc.sleep(500);
+    await this.carPickDay("pickupDate", d1);
+    await this.carPickDay("returnDate", d2);
+    await this.carPickTime("pickup", t1);
+    await this.carPickTime("return", t2);
+    const form = {
+      location: document.getElementById("pickupLocation").value,
+      chosen,
+      pickup: `${document.getElementById("pickupDate").value} ${document.getElementById("pickupTime").value}`,
+      dropoff: `${document.getElementById("returnDate").value} ${document.getElementById("returnTime").value}`,
+    };
+    const btn = [...document.querySelectorAll("button")].find((b) => /^Search Cars$/i.test(b.textContent.trim()));
+    if (!btn) throw new Error("No Search Cars button");
+    btn.click();
+    return { ...form, searched: true };
+  }
+
+  carCards() {
+    return [...document.querySelectorAll(".ct-availability-vehicle")].filter((c) => /Book Now/i.test(c.innerText || ""));
+  }
+
+  parseCar(el, index) {
+    const lines = (el.innerText || "").split("\n").map((s) => s.trim()).filter(Boolean);
+    const price = lines.find((l) => /^\$\s*[\d,]+(?:\.\d+)?$/.test(l));
+    const nums = lines.filter((l) => /^\d+$/.test(l));
+    const after = (label) => lines[lines.findIndex((l) => l === label) + 1] || null;
+    const logo = [...el.querySelectorAll("img[alt]")].map((i) => i.alt.trim()).find((a) => a && !/or similar/i.test(a));
+    return {
+      index,
+      class: lines[0] || null,
+      model: lines[1] || null,
+      price: price ? price.replace(/\s+/g, "") : null,
+      days: lines.find((l) => /^Price for/i.test(l))?.replace(/^Price for\s*/i, "") || null,
+      seats: nums[0] || null,
+      bags: nums[1] || null,
+      doors: nums[2] || null,
+      transmission: /Automatic/i.test(el.innerText) ? "Automatic" : /Manual/i.test(el.innerText) ? "Manual" : null,
+      freeCancellation: /Free Cancellation/i.test(el.innerText),
+      pickup: after("Pick-Up Location:"),
+      supplier: logo || null,
+    };
+  }
+
+  async carResults(max = 20) {
+    await bsc.waitFor(() => this.carCards().length > 0, 60, 500);
+    await bsc.sleep(800);
+    const cars = this.carCards().map((el, i) => this.parseCar(el, i));
+    const count = document.body.innerText.match(/(\d+)\s+cars? available/i)?.[1] || null;
+    return { url: location.href, count: count ? Number(count) : null, loaded: cars.length, cars: cars.slice(0, Number(max) || 20) };
+  }
+
+  carCategories() {
+    return [...document.querySelectorAll(".ct-list-block__carousel__item")].map((el) => ({
+      id: (el.getAttribute("data-auto-id") || "").replace("ct-list-block__carousel__item--", ""),
+      label: el.innerText.replace(/\s+/g, " ").trim(),
+      active: /\bactive\b/.test(el.className),
+    }));
+  }
+
+  async carCategory(name) {
+    if (!name) throw new Error("usage: carCategory <name>   e.g. carCategory minivan");
+    const want = String(name).toLowerCase().replace(/\s+/g, "");
+    const items = [...document.querySelectorAll(".ct-list-block__carousel__item")];
+    const el = items.find((e) => (e.getAttribute("data-auto-id") || "").endsWith(`--${want}`)) ||
+      items.find((e) => e.innerText.toLowerCase().replace(/\s+/g, "").includes(want));
+    if (!el) throw new Error(`No category "${name}". Run carCategories.`);
+    (el.querySelector(".ct-cars-carousel-car") || el).click();
+    await bsc.sleep(1500);
+    return { categories: this.carCategories().filter((c) => c.active), count: document.body.innerText.match(/(\d+)\s+cars? available/i)?.[1] || null };
+  }
+
+  async carSort(how = "price") {
+    const h = String(how).toLowerCase();
+    const label = /rat/.test(h) ? "Sort by Rating" : /rec/.test(h) ? "Recommended" : "Sort by Price";
+    const btn = [...document.querySelectorAll("button, a")].find((b) => (b.getAttribute("aria-label") || b.textContent).trim().toLowerCase().includes(label.toLowerCase()));
+    if (!btn) throw new Error(`No sort control "${label}"`);
+    btn.click();
+    await bsc.sleep(1200);
+    return { sort: label };
   }
 }
