@@ -208,6 +208,7 @@ This repo ships these in `plugins/` (auto runtime-loaded on first use, inject-lo
 - **upwork** — search Upwork freelancers (keywords, hourly rate, badge, country) and read the result tiles. Read-only. Writeup: [doc/upwork.md](doc/upwork.md).
 - **notion** — search Notion pages from the "Search or ask" box, open a result, and read a page's comments. Writeup: [doc/notion.md](doc/notion.md).
 - **dollar** — dollar.com helpers: dismiss the email opt-in popup, read Locations search results. Writeup: [doc/dollar.md](doc/dollar.md).
+- **jewishgen** — fill and submit JewishGen Global Search (surname, given name, town, region, match type) and read the partner links; record rows need a signed-in account. Read-only. Writeup: [doc/jewishgen.md](doc/jewishgen.md).
 - **egged** — plan Israeli bus trips with Egged's journey planner (geocode places, search, read itineraries). Writeup: [doc/egged.md](doc/egged.md).
 
 ```bash
