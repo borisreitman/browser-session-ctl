@@ -35,9 +35,11 @@ Usage:
   browser-session-ctl click <ref|name>
   browser-session-ctl options <ref|name>
   browser-session-ctl type <ref|name> <text> [--submit]
+  browser-session-ctl type-trusted <ref|name> <text> [--submit] [--no-clear]
   browser-session-ctl press <key>
   browser-session-ctl scroll [up|down]
   browser-session-ctl screenshot [path]
+  browser-session-ctl images [--selector CSS] [--min-size N] [--index I,J] [--scroll] [--save DIR] [--prefix NAME]
   browser-session-ctl annotate [on|off]
   browser-session-ctl debug-set-favicon [on|off]
   browser-session-ctl debug-annotate-highlight [action|active|idle]
@@ -46,7 +48,7 @@ Usage:
   browser-session-ctl react [detect|tree|inspect|invoke|setValue|setHookState|...] [json-or-string args...]
   browser-session-ctl angular [detect|survey|globals|component|expando] [json-or-string args...]
   browser-session-ctl reload-extension
-  browser-session-ctl plugin.<namespace> [args...]
+  browser-session-ctl plugin.<namespace> [args...]   (an arg of @- reads stdin, @file:<path> reads a file, keeping newlines)
   browser-session-ctl plugin-list
   browser-session-ctl plugin-load <namespace> <file.js>
   browser-session-ctl plugin-inject <namespace> [file.js]
@@ -62,6 +64,12 @@ Usage:
             is connected. \`profiles\` lists them; rename in the extension popup.
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
+
+type-trusted types via the Chrome DevTools Protocol (real key events, not
+page-script dispatchEvent), for fields that ignore synthetic input from
+\`type\` — e.g. one that only reacts to trusted keystrokes. Briefly attaches
+Chrome's debugger to the tab (shows the "being debugged" bar) and detaches
+right after. Clears the field first unless --no-clear is passed.
 
 Examples:
   browser-session-ctl snapshot
@@ -80,6 +88,7 @@ Examples:
   browser-session-ctl debug-annotate-highlight idle
   browser-session-ctl config annotate-new-tabs
   browser-session-ctl config annotate-new-tabs off
+  browser-session-ctl type-trusted e51 "Annhurst"
   browser-session-ctl plugin.jupyter-notebook cells
   browser-session-ctl plugin-list
   browser-session-ctl plugin-load my-thing ./my-thing.js
@@ -169,6 +178,24 @@ function printResult(result) {
     return;
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+// Plugin args are plain shell words, which flattens multi-line text. "@-" is replaced by stdin and
+// "@file:<path>" by that file's contents, so a plugin method can receive text with its newlines intact.
+async function expandPluginArgs(args) {
+  const out = [];
+  for (const arg of args) {
+    if (arg === "@-") {
+      const chunks = [];
+      for await (const chunk of process.stdin) chunks.push(chunk);
+      out.push(Buffer.concat(chunks).toString("utf8").replace(/\n$/, ""));
+    } else if (arg.startsWith("@file:")) {
+      out.push((await readFile(arg.slice("@file:".length), "utf8")).replace(/\n$/, ""));
+    } else {
+      out.push(arg);
+    }
+  }
+  return out;
 }
 
 // Two plugin operations:
@@ -275,7 +302,7 @@ async function main(argv) {
   if (verb.startsWith("plugin.")) {
     const namespace = verb.slice("plugin.".length);
     if (!namespace) throw new Error("plugin namespace is required, e.g. plugin.jupyter-notebook");
-    printResult(await invokePluginAutoLoad(namespace, rest, tabId));
+    printResult(await invokePluginAutoLoad(namespace, await expandPluginArgs(rest), tabId));
     return;
   }
 
@@ -370,6 +397,28 @@ async function main(argv) {
       );
       return;
     }
+    case "type-trusted": {
+      const submit = rest.includes("--submit");
+      const noClear = rest.includes("--no-clear");
+      const args = rest.filter((arg) => arg !== "--submit" && arg !== "--no-clear");
+      const [target, ...textParts] = args;
+      if (!target) throw new Error("ref or name is required");
+      printResult(
+        await command(
+          "page.typeTrusted",
+          withTab(
+            {
+              ...targetParams(target),
+              text: textParts.join(" "),
+              submit,
+              clear: !noClear,
+            },
+            tabId
+          )
+        )
+      );
+      return;
+    }
     case "press": {
       const key = rest[0];
       if (!key) throw new Error("key is required");
@@ -387,6 +436,51 @@ async function main(argv) {
       const base64 = String(result.dataUrl || "").replace(/^data:image\/png;base64,/, "");
       await writeFile(path, Buffer.from(base64, "base64"));
       printResult({ path, url: result.url, title: result.title });
+      return;
+    }
+    case "images": {
+      // images [--selector CSS] [--min-size N] [--index I,J] [--scroll] [--save DIR] [--prefix NAME]
+      // Without --save: list the page's images. With --save: download each
+      // original file (extension picked from its type) into DIR.
+      const o = { selector: "img", minSize: 0, index: undefined, scroll: false, save: null, prefix: "image" };
+      for (let i = 0; i < rest.length; i += 1) {
+        const a = rest[i];
+        if (a === "--selector") o.selector = rest[(i += 1)];
+        else if (a === "--min-size") o.minSize = Number(rest[(i += 1)]) || 0;
+        else if (a === "--index") o.index = String(rest[(i += 1)]).split(",").map(Number);
+        else if (a === "--scroll") o.scroll = true;
+        else if (a === "--save") o.save = rest[(i += 1)];
+        else if (a === "--prefix") o.prefix = rest[(i += 1)];
+        else if (a === "--url") (o.urls ||= []).push(rest[(i += 1)]);
+      }
+      const items = await command(
+        "page.images",
+        withTab(
+          { selector: o.selector, minSize: o.minSize, index: o.index, scroll: o.scroll, urls: o.urls, download: Boolean(o.save) },
+          tabId
+        )
+      );
+      if (!o.save) {
+        printResult(items);
+        return;
+      }
+      await mkdir(o.save, { recursive: true });
+      const EXT = { "image/jpeg": "jpg", "image/svg+xml": "svg", "image/x-icon": "ico", "image/vnd.microsoft.icon": "ico" };
+      const saved = [];
+      for (const it of items) {
+        if (!it.dataUrl) {
+          saved.push({ index: it.index, url: it.url, error: it.error || "no data" });
+          continue;
+        }
+        const m = /^data:([^;,]*)(;base64)?,/.exec(it.dataUrl);
+        const mime = (m && m[1]) || "application/octet-stream";
+        const ext = EXT[mime] || mime.split("/")[1] || "bin";
+        const body = it.dataUrl.slice(m ? m[0].length : 0);
+        const path = join(o.save, `${o.prefix}-${it.index}.${ext}`);
+        await writeFile(path, m && m[2] ? Buffer.from(body, "base64") : Buffer.from(decodeURIComponent(body)));
+        saved.push({ index: it.index, path, width: it.width, height: it.height, source: it.source, url: it.originalUrl || it.url });
+      }
+      printResult(saved);
       return;
     }
     case "react": {

@@ -7,7 +7,8 @@
     "tabs",
     "scripting",
     "storage",
-    "alarms"
+    "alarms",
+    "debugger"
   ],
   "host_permissions": [
     "<all_urls>"

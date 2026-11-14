@@ -613,6 +613,90 @@ function unwrap(response) {
   return response.result;
 }
 
+// page.type dispatches synthetic DOM events (dispatchEvent), same as a
+// plugin calling that from the page itself. Most sites treat that exactly
+// like real typing. Some don't: a field can be wired to only react to
+// trusted, OS-generated input (event.isTrusted, or logic that simply never
+// fires without a real keydown/keyup pair), and a synthetic value-set gets
+// silently reverted on the next render. page.typeTrusted is for that case:
+// it drives the same tab through the Chrome DevTools Protocol, so Chrome
+// itself generates the key events — indistinguishable from a person typing.
+// It attaches chrome.debugger to the tab for the duration of the call (shows
+// Chrome's "is being debugged" bar) and detaches immediately after.
+const SPECIAL_KEYS = {
+  Backspace: { keyCode: 8, code: "Backspace" },
+  End: { keyCode: 35, code: "End" },
+  Enter: { keyCode: 13, code: "Enter", text: "\r" },
+};
+
+function charKeyDef(ch) {
+  if (/[a-z]/.test(ch)) return { code: `Key${ch.toUpperCase()}`, keyCode: ch.toUpperCase().charCodeAt(0) };
+  if (/[A-Z]/.test(ch)) return { code: `Key${ch}`, keyCode: ch.charCodeAt(0) };
+  if (/[0-9]/.test(ch)) return { code: `Digit${ch}`, keyCode: ch.charCodeAt(0) };
+  const named = {
+    " ": ["Space", 32],
+    "-": ["Minus", 189],
+    "_": ["Minus", 189],
+    ".": ["Period", 190],
+    ",": ["Comma", 188],
+    "(": ["Digit9", 57],
+    ")": ["Digit0", 48],
+  };
+  const [code, keyCode] = named[ch] || ["Unidentified", ch.charCodeAt(0) || 0];
+  return { code, keyCode };
+}
+
+async function cdpKeyEvent(tabId, type, opts) {
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", { type, ...opts });
+}
+
+async function cdpTypeChar(tabId, ch) {
+  const { code, keyCode } = charKeyDef(ch);
+  const base = { key: ch, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode };
+  await cdpKeyEvent(tabId, "rawKeyDown", base);
+  await cdpKeyEvent(tabId, "char", { ...base, text: ch, unmodifiedText: ch });
+  await cdpKeyEvent(tabId, "keyUp", base);
+}
+
+async function cdpPressSpecial(tabId, key) {
+  const def = SPECIAL_KEYS[key];
+  if (!def) throw new Error(`Unsupported trusted-type key "${key}"`);
+  const base = { key, code: def.code, windowsVirtualKeyCode: def.keyCode, nativeVirtualKeyCode: def.keyCode };
+  await cdpKeyEvent(tabId, "rawKeyDown", base);
+  if (def.text) await cdpKeyEvent(tabId, "char", { ...base, text: def.text, unmodifiedText: def.text });
+  await cdpKeyEvent(tabId, "keyUp", base);
+}
+
+async function typeTrusted(tab, ref, text, { clear, submit }) {
+  const before = unwrap(await sendToPage(tab, { action: "focusOnly", ref }));
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(debuggee, "1.3");
+    attached = true;
+    if (clear && before.value) {
+      await cdpPressSpecial(tab.id, "End");
+      for (let i = 0; i < String(before.value).length; i += 1) {
+        await cdpPressSpecial(tab.id, "Backspace");
+      }
+    }
+    for (const ch of String(text)) {
+      await cdpTypeChar(tab.id, ch);
+    }
+    if (submit) await cdpPressSpecial(tab.id, "Enter");
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {
+        // Already detached (e.g. the tab closed mid-call).
+      }
+    }
+  }
+  const after = unwrap(await sendToPage(tab, { action: "fieldValue", ref }));
+  return { ref, value: after.value };
+}
+
 function runInPage(tab, args, func) {
   return chrome.scripting.executeScript({
     target: { tabId: tab.id },
@@ -959,6 +1043,24 @@ async function handleCommand(message) {
       }
     }
 
+    // Same shape as page.type, but the keystrokes are dispatched by Chrome
+    // itself over the debugger protocol instead of as page-script
+    // dispatchEvent calls — see typeTrusted() for why that's sometimes the
+    // only thing a page will actually respond to.
+    case "page.typeTrusted": {
+      const tab = await tabById(params.tabId);
+      let ref = params.ref;
+      if (!ref && params.name) {
+        const found = unwrap(await sendToPage(tab, { action: "find", name: params.name }));
+        ref = found.ref;
+      }
+      if (!ref) throw new Error("ref or name is required");
+      return typeTrusted(tab, ref, params.text ?? "", {
+        clear: params.clear !== false,
+        submit: Boolean(params.submit),
+      });
+    }
+
     case "page.annotate": {
       const tab = await tabById(params.tabId);
       const enabled = params.enabled !== false;
@@ -1000,6 +1102,69 @@ async function handleCommand(message) {
           amount: params.amount,
         })
       );
+    }
+
+    // Images on the page. Listing happens in the page (it knows which <img>s
+    // are loaded); with params.download the bytes are fetched here in the
+    // service worker, where <all_urls> host permission lets the request skip
+    // the page's CORS rules and carry the site's cookies — so the original
+    // file comes back, not a re-encoded canvas. If that fetch fails, fall
+    // back to drawing a crossOrigin="anonymous" copy on a canvas in the page.
+    case "page.images": {
+      const tab = await tabById(params.tabId);
+      // params.urls: download exactly these URLs (no page listing).
+      const items = Array.isArray(params.urls)
+        ? params.urls.map((url, i) => ({ index: i + 1, url, width: null, height: null, alt: "" }))
+        : unwrap(
+            await sendToPage(tab, {
+              action: "images",
+              selector: params.selector || "img",
+              minSize: Number(params.minSize) || 0,
+              scroll: Boolean(params.scroll),
+            })
+          );
+      const only = Array.isArray(params.index) ? params.index : null;
+      const chosen = only ? items.filter((it) => only.includes(it.index)) : items;
+      if (!params.download) return chosen;
+      const fetchAsDataUrl = async (url) => {
+        if (url.startsWith("data:")) return url;
+        const res = await fetch(url, { credentials: "include" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let bin = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        }
+        return `data:${blob.type || "application/octet-stream"};base64,${btoa(bin)}`;
+      };
+      for (const it of chosen) {
+        try {
+          // Prefer the full-size file when the page showed a resized copy;
+          // if that can't be fetched, take what the page displayed.
+          let got = null;
+          if (it.originalUrl) {
+            try {
+              got = await fetchAsDataUrl(it.originalUrl);
+              it.source = "original";
+            } catch {
+              got = null;
+            }
+          }
+          if (!got) {
+            got = await fetchAsDataUrl(it.url);
+            it.source = "displayed";
+          }
+          it.dataUrl = got;
+        } catch (fetchErr) {
+          try {
+            it.dataUrl = unwrap(await sendToPage(tab, { action: "imageCanvas", url: it.url }));
+          } catch (canvasErr) {
+            it.error = `fetch: ${fetchErr.message || fetchErr}; canvas: ${canvasErr.message || canvasErr}`;
+          }
+        }
+      }
+      return chosen;
     }
 
     case "page.screenshot": {
@@ -1098,7 +1263,7 @@ async function handleCommand(message) {
 
 const PLUGIN_COMMANDS = new Set([
   "page.snapshot", "page.text", "page.options", "page.click", "page.type", "page.press",
-  "page.scroll", "page.status", "page.annotate", "react.call", "angular.call",
+  "page.scroll", "page.status", "page.annotate", "react.call", "angular.call", "page.images",
 ]);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

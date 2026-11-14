@@ -20,6 +20,8 @@ There is no public `window.Jupyter` API in this UI. Every action clicks the real
 | `get <index>` | One cell's source. |
 | `set <index> <text…>` | Replace that cell's source. Shell words are joined with spaces. |
 | `run <index>` | Execute that cell (toolbar: run cell and select next). |
+| `output <index>` | Structured outputs of one cell: `executionCount` (`*` while running), `running`, and `outputs` — `{type:'table', columns, rows}` for a rendered DataFrame (index first), `text`, `error` (traceback), `image` (mime + size), or `html`. Read-only, no screenshot needed. pandas truncates long frames (`display.max_rows`) before they reach the page. |
+| `runWait <index> [timeoutSeconds=60]` | `run`, then wait until the cell finishes and return its `output`. |
 | `insert <index> [above\|below] [code\|markdown\|raw]` | New cell relative to `<index>`. Defaults: below, code. |
 | `delete <index>` | Delete that cell. |
 | `output <index>` | Structured outputs of one cell: `executionCount` (`*` while running), `running`, and `outputs[]` items: `table` (`columns`, `rows` for rendered DataFrames), `text`, `error`, `image` (`mime`, `bytes`), or `html`. pandas truncates long frames before they reach the DOM. |
@@ -52,6 +54,7 @@ browser-session-ctl --tab <id> plugin.jupyter-notebook status
 ## Limits
 
 - Notebook 7 / JupyterLab DOM only (`.jp-Cell`, CodeMirror 6, `jp-button data-command`). Classic Notebook (`window.Jupyter`) is a different UI.
-- `set` from the CLI flattens newlines (arguments are strings joined by spaces). For a multi-line body, POST JSON to the sidecar so the text stays intact — same pattern as `page.type` in the README.
+- `set` joins shell words with spaces, so newlines are lost. For multi-line source pass `@-` (read stdin) or `@file:<path>` as the text, e.g. `printf 'a = 1\nb = 2\n' | browser-session-ctl --tab <id> plugin.jupyter-notebook set 2 @-`. The CLI expands those two forms for every plugin.
+- `set` on a rendered markdown cell double-clicks it into edit mode, replaces the text, then runs it to render again (if it was the last cell, the extra empty cell that creates is deleted).
 - Clicking a toolbar command that is not on the page throws (`Toolbar command "…" is not available`).
 - Plugin state lives in the page. Reload the notebook tab and you get a fresh `Plugin` instance; the notebook content on disk is unchanged until you save in the UI.

@@ -25,6 +25,10 @@ class Plugin {
         comments:
           "comments — on the currently open page, open (or reuse) its Comments panel and return every comment as {thread, author, authorUrl, timestamp, body}.",
         closeComments: "closeComments — close the Comments panel.",
+        properties:
+          "properties — read the page properties above the body (status fields, AI summary, relations like FACT records) as {fields:[{name, value}]}. Does not open collapsed groups.",
+        page:
+          "page [--json] [--no-expand] — read the whole body of the open page. Scrolls top to bottom (Notion only renders blocks near the viewport) and opens every collapsed toggle / toggle heading, nested ones too. Returns {title, url, blockCount, toggleClicks, markdown}; --json adds raw blocks; --no-expand leaves toggles as they are.",
       },
     };
   }
@@ -290,7 +294,22 @@ class Plugin {
     };
   }
 
+  // Some page layouts (e.g. database rows opened with ?v=) have no topbar
+  // Comments button; comments render inline under the body instead, in
+  // .notion-page-view-discussion. A page with no comments has just the empty
+  // reply box there, so that is "zero comments", not an error.
+  inlineComments() {
+    const root = document.querySelector(".notion-page-view-discussion");
+    if (!root) return null;
+    const links = [...root.querySelectorAll('a[href*="/profiles/"]')];
+    return links.map((a, i) => this.parseCommentRow(a, i));
+  }
+
   async comments() {
+    if (!this.commentsButton() && !this.commentsScroller()) {
+      const inline = this.inlineComments();
+      if (inline) return inline;
+    }
     await this.ensureCommentsOpen();
     const threads = [...document.querySelectorAll(".notion-update-sidebar-tab-comments-discussion-item")];
     return threads.flatMap((thread, threadIndex) =>
@@ -298,10 +317,230 @@ class Plugin {
     );
   }
 
+  // Page properties shown above the body (status fields, AI summary, linked
+  // relations, ...). The first block is a row of [name, value] cells; later
+  // blocks are "Label\nvalue..." sections. Collapsed groups ("25 more
+  // properties") are not opened.
+  properties() {
+    const blocks = [...document.querySelectorAll(".layout-content")].filter(
+      (l) => !l.querySelector(".notion-page-content") && !l.querySelector(".layout-content")
+    );
+    if (!blocks.length) throw new Error("No page layout found — is a page open?");
+    const fields = [];
+    const seen = new Set();
+    const clean = (t) => t.split("\n").map((s) => s.trim()).filter(Boolean);
+    const add = (name, value) => {
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      fields.push({ name, value });
+    };
+    blocks.forEach((s) => {
+      const lines = clean(s.innerText);
+      if (!lines.length || /^Add (icon|cover)/.test(lines[0]) || lines[0] === "Comments") return;
+      // The status row: a wrapper whose children are each one "name, value" cell.
+      const row = [...s.querySelectorAll("div")].reverse().find((d) => {
+        const k = [...d.children];
+        return k.length > 2 && k.every((c) => {
+          const n = clean(c.innerText).length;
+          return n >= 2 && n <= 4;
+        });
+      });
+      if (row && /status/i.test(lines[0])) {
+        [...row.children].forEach((c) => {
+          const [name, ...value] = clean(c.innerText);
+          add(name, value.join(" | "));
+        });
+      } else {
+        const [name, ...value] = lines;
+        add(name, value.join("\n"));
+      }
+    });
+    return { title: document.title, fields };
+  }
+
   closeComments() {
     const btn = this.commentsButton();
     if (!this.commentsScroller()) return { wasOpen: false };
     if (btn) this.fireClick(btn);
     return { wasOpen: true };
+  }
+
+  // Notion only keeps the blocks near the viewport in the DOM, so a long page
+  // is never fully rendered at once (blocks below the fold simply aren't
+  // there). The page body lives in the vertical .notion-scroller with the
+  // biggest scrollHeight (the other vertical one is the sidebar).
+  pageScroller() {
+    const scrollers = [...document.querySelectorAll(".notion-scroller.vertical")].filter((s) =>
+      s.querySelector(".notion-page-content")
+    );
+    return scrollers.sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || null;
+  }
+
+  blockType(el) {
+    const m = (el.className || "").toString().match(/notion-([a-z_]+)-block/);
+    return m ? m[1] : "unknown";
+  }
+
+  // Blocks nested inside this one (toggle children, list sub-items, columns)
+  // are separate [data-block-id] elements, so a block's own text is only the
+  // editable leaves whose closest block is this block.
+  blockOwnText(el) {
+    return [...el.querySelectorAll("[data-content-editable-leaf]")]
+      .filter((leaf) => leaf.closest("[data-block-id]") === el)
+      .map((leaf) => (leaf.textContent || "").replace(/​/g, "").trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  blockDepth(el, content) {
+    let depth = 0;
+    let p = el.parentElement;
+    while (p && p !== content) {
+      if (p.hasAttribute && p.hasAttribute("data-block-id")) depth += 1;
+      p = p.parentElement;
+    }
+    return depth;
+  }
+
+  readVisibleBlocks(content) {
+    return [...content.querySelectorAll("[data-block-id]")].map((el) => ({
+      id: el.getAttribute("data-block-id"),
+      type: this.blockType(el),
+      depth: this.blockDepth(el, content),
+      text: this.blockOwnText(el),
+      checked: el.querySelector('[role="checkbox"]') ? el.querySelector('[role="checkbox"]').getAttribute("aria-checked") === "true" : undefined,
+    }));
+  }
+
+  // Merge what is currently rendered into the ordered list collected so far:
+  // a block we haven't seen goes right after the closest preceding block (in
+  // this DOM order) that we already have, or at the start.
+  mergeBlocks(order, byId, visible) {
+    let anchor = -1;
+    for (const block of visible) {
+      if (byId.has(block.id)) {
+        const known = byId.get(block.id);
+        if (block.text && !known.text) known.text = block.text;
+        anchor = order.indexOf(block.id);
+        continue;
+      }
+      byId.set(block.id, block);
+      order.splice(anchor + 1, 0, block.id);
+      anchor += 1;
+    }
+  }
+
+  // Toggle blocks and toggle headings (e.g. "### PR 1") render their children
+  // only while open. A closed one has an arrow button
+  // div[role=button][aria-expanded=false][aria-label=Open] owned directly by
+  // the block (the same arrow reads aria-label=Close while open). Opening one
+  // can reveal more closed toggles inside it, so keep going until a round
+  // finds none. This changes the page's open/closed state for this user.
+  closedToggleButtons(content) {
+    return [...content.querySelectorAll('[role="button"][aria-expanded="false"][aria-label="Open"]')].filter(
+      (btn) => btn.closest("[data-block-id]") && !btn.closest(".notion-collection_view-block")
+    );
+  }
+
+  async expandToggles(content) {
+    let clicked = 0;
+    for (let round = 0; round < 12; round += 1) {
+      const closed = this.closedToggleButtons(content);
+      if (!closed.length) break;
+      for (const btn of closed) {
+        this.fireClick(btn);
+        clicked += 1;
+        await this.sleep(150);
+      }
+      await this.sleep(250);
+    }
+    return clicked;
+  }
+
+  blockToMarkdown(b) {
+    const indent = "  ".repeat(b.depth);
+    const text = b.text;
+    switch (b.type) {
+      case "header":
+        return `# ${text}`;
+      case "sub_header":
+        return `## ${text}`;
+      case "sub_sub_header":
+        return `### ${text}`;
+      case "bulleted_list":
+        return `${indent}- ${text}`;
+      case "numbered_list":
+        return `${indent}1. ${text}`;
+      case "to_do":
+        return `${indent}- [${b.checked ? "x" : " "}] ${text}`;
+      case "toggle":
+        return `${indent}▸ ${text}`;
+      case "quote":
+        return `${indent}> ${text}`;
+      case "callout":
+        return `${indent}> ${text}`;
+      case "code":
+        return `${indent}\`\`\`\n${text}\n\`\`\``;
+      case "divider":
+        return `${indent}---`;
+      case "image":
+        return `${indent}[image]`;
+      default:
+        return text ? `${indent}${text}` : "";
+    }
+  }
+
+  // page [--json] [--no-expand] — the whole body of the open page, scrolled
+  // through top to bottom so lazily rendered blocks are collected too, with
+  // every collapsed toggle (and toggle heading) opened, nested ones included.
+  // Returns {title, url, blockCount, toggleClicks, markdown}; --json adds the
+  // raw blocks ({id, type, depth, text}); --no-expand leaves toggles alone.
+  async page(...args) {
+    const wantJson = args.includes("--json");
+    const expand = !args.includes("--no-expand");
+    const content = document.querySelector(".notion-page-content");
+    const scroller = this.pageScroller();
+    if (!content || !scroller) {
+      throw new Error("No open page body found — is this a page (not a database view or the search overlay)?");
+    }
+    const startTop = scroller.scrollTop;
+    const order = [];
+    const byId = new Map();
+    let expanded = 0;
+
+    scroller.scrollTop = 0;
+    await this.sleep(300);
+    if (expand) expanded = await this.expandToggles(content);
+    this.mergeBlocks(order, byId, this.readVisibleBlocks(content));
+
+    const step = Math.max(200, Math.floor(scroller.clientHeight * 0.6));
+    let lastHeight = -1;
+    for (let i = 0; i < 400; i += 1) {
+      const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+      if (atBottom && scroller.scrollHeight === lastHeight) break;
+      lastHeight = scroller.scrollHeight;
+      scroller.scrollTop = scroller.scrollTop + step;
+      await this.sleep(250);
+      if (expand) expanded += await this.expandToggles(content);
+      this.mergeBlocks(order, byId, this.readVisibleBlocks(content));
+    }
+    scroller.scrollTop = startTop;
+
+    const blocks = order.map((id) => byId.get(id));
+    const markdown = blocks
+      .map((b) => this.blockToMarkdown(b))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    const titleEl = document.querySelector(".notion-page-block h1, .notion-frame h1");
+    const result = {
+      title: titleEl ? (titleEl.textContent || "").trim() : document.title,
+      url: location.href,
+      blockCount: blocks.length,
+      toggleClicks: expanded,
+      markdown,
+    };
+    if (wantJson) result.blocks = blocks;
+    return result;
   }
 }

@@ -87,6 +87,7 @@ Unlike React there is no `angularClick`: Angular binds ordinary DOM listeners, s
 | `bsc.sleep(ms)`, `bsc.clean(text)` | Delay; collapse whitespace and trim. |
 | `bsc.waitFor(fn, tries = 20, ms = 250)` | First truthy `fn()` (it may be async) or `null`. |
 | `bsc.isDisplayed(el, { minSize = 2 })` | Rendered, visible and at least `minSize` px each way. |
+| `bsc.images({ selector, minSize, scroll, index, urls, download })` | The core `images` command (see the README). Lists the page's `<img>`s as `[{index, url, originalUrl?, width, height, alt}]`; with `download: true` each item also has `dataUrl` (the full-size original, fetched by the service worker so page CORS doesn't apply) or `error`. A plugin can't write files, so return the items from the method; the CLI's `images --save` is what writes files. |
 | `bsc.dates.looksLikeDate(v)` / `.parse(v)` / `.toIso(v)` | `YYYY-MM-DD` or `MM/DD/YYYY` helpers. |
 | `bsc.status()`, `bsc.snapshot()`, `bsc.text()`, `bsc.find(name)`, `bsc.options(target)`, `bsc.scroll(dir)` | The CLI's page reads. |
 | `bsc.command(method, params)` | Escape hatch for a page-level command (`page.*`, `react.call`, `angular.call`). Other commands are refused and the tab is always the plugin's own. |

@@ -134,6 +134,26 @@ browser-session-ctl text
 browser-session-ctl screenshot /tmp/page.png
 ```
 
+`images` lists the page's loaded `<img>`s (`index`, `url`, `width`, `height`, `alt`), and with `--save DIR` downloads each **original file** into `DIR` as `image-<index>.<ext>`:
+
+```bash
+browser-session-ctl images --min-size 200
+browser-session-ctl images --selector ".article img" --scroll --save ./out --prefix ticket
+browser-session-ctl images --index 2,4 --save ./out
+```
+
+`--selector CSS` limits which images (default `img`), `--min-size N` skips images smaller than N px, `--index I,J` picks from the listing, and `--scroll` first walks the page's main scroller top to bottom so lazy or virtualized images render (the scroll position is restored). Sites often display a resized copy, so for each image it looks for the full-size file (the widest `srcset` candidate, a link around the image that points at an image file, or `data-original` / `data-full` / `data-large-file` / `data-orig-file` / `data-zoom-src` / `data-src`) and downloads that, falling back to the displayed URL; listings show it as `originalUrl` and `--save` reports `source: original|displayed`. `--url U` (repeatable) downloads exactly those URLs. The bytes are fetched by the extension's service worker, which has `<all_urls>` host permission, so the page's CORS rules don't apply and the site's cookies are sent. If that fetch fails, it falls back to a `crossOrigin="anonymous"` canvas export (PNG) from the page, and an image neither path can read comes back with an `error`. Only `<img>` elements are covered, not CSS backgrounds.
+
+`type` dispatches synthetic DOM events (same as a page script calling `dispatchEvent`), which is indistinguishable from real typing on almost every site. A rare field is wired to only react to trusted, OS-generated keystrokes and will silently revert anything `type` sets. For that case there's `type-trusted`, which drives the same field through the Chrome DevTools Protocol so Chrome itself generates the key events:
+
+```bash
+browser-session-ctl type-trusted e51 "Annhurst"
+browser-session-ctl type-trusted e51 "Annhurst" --submit
+browser-session-ctl type-trusted e51 "more text" --no-clear
+```
+
+It briefly attaches `chrome.debugger` to the tab for the call (you'll see Chrome's "is being debugged" bar) and detaches right after. Reach for `type` first; only fall back to `type-trusted` once you've confirmed a field is actually reverting `type`'s input.
+
 `open [url]` creates a new tab and prints its `id` right away, so you can target it with `--tab <id>` on the very next command without first running `tabs` to look it up. Add `--background` to open it without switching focus. If the currently active tab is blank (`about:blank` or a fresh new-tab page), it reuses that tab instead of opening another one. By default it also turns `annotate` on for the page it opens — see `config annotate-new-tabs` below to change that.
 
 ```bash
@@ -203,10 +223,10 @@ This repo ships these in `plugins/` (auto runtime-loaded on first use, inject-lo
 - **google-flights** — search Google Flights, sort cheapest/best/fastest, and read the departing-flight list. Writeup: [doc/google-flights.md](doc/google-flights.md).
 - **google-ads** — Google Ads Keyword Planner: run "Discover new keywords" searches (optionally filtered by a site), then read, sort and page through the ideas as records. Read-only. Writeup: [doc/google-ads.md](doc/google-ads.md).
 - **ryanair** — search Ryanair (`/trip/flights/select`), read outbound/return cards, pick a day or fare. Writeup: [doc/ryanair.md](doc/ryanair.md).
+- **notion** — search Notion, open a page, read its comments, and read a page's whole body as markdown (scrolls through Notion's lazily rendered blocks and opens collapsed toggles). Writeup: [doc/notion.md](doc/notion.md).
 - **kayak** — search Kayak rental cars by airport and dates, filter by car class, read every car with each booking site's total. Writeup: [doc/kayak.md](doc/kayak.md).
 - **linkedin** — search LinkedIn people (name, degree, headline, location, mutual connections), and select a Page you administer to draft a post as it. Never publishes. Writeup: [doc/linkedin.md](doc/linkedin.md).
 - **upwork** — search Upwork freelancers (keywords, hourly rate, badge, country) and read the result tiles. Read-only. Writeup: [doc/upwork.md](doc/upwork.md).
-- **notion** — search Notion pages from the "Search or ask" box, open a result, and read a page's comments. Writeup: [doc/notion.md](doc/notion.md).
 - **dollar** — dollar.com helpers: dismiss the email opt-in popup, read Locations search results. Writeup: [doc/dollar.md](doc/dollar.md).
 - **jewishgen** — fill and submit JewishGen Global Search (surname, given name, town, region, match type) and read the partner links; record rows need a signed-in account. Read-only. Writeup: [doc/jewishgen.md](doc/jewishgen.md).
 - **egged** — plan Israeli bus trips with Egged's journey planner (geocode places, search, read itineraries). Writeup: [doc/egged.md](doc/egged.md).

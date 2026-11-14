@@ -636,6 +636,23 @@
     return { ref, value: fieldValue(el) };
   }
 
+  // Focuses the field without typing into it — the first half of a
+  // trusted (CDP-driven) type, where the background service worker itself
+  // dispatches the actual keystrokes once this element is focused.
+  function focusOnly(ref) {
+    const host = requireEl(ref);
+    const el = typeable(host) || host;
+    el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+    if (el instanceof HTMLElement) el.focus({ preventScroll: true });
+    return { ref, value: fieldValue(el) };
+  }
+
+  // Reads a field's current value without touching it — used after a
+  // trusted type to report what actually landed.
+  function readFieldValue(ref) {
+    return { ref, value: fieldValue(requireEl(ref)) };
+  }
+
   async function compilePluginClass(code) {
     const source = `${code}\nexport default Plugin;\n`;
     const blobUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
@@ -777,7 +794,106 @@
   }
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const cleanText = (text) => String(text || "").replace(/\s+/g, " ").trim();
+
+  // ---- images ------------------------------------------------------------
+  // The scrollable element with the most to scroll: usually the document, but
+  // single-page apps (Notion, Gmail, ...) scroll an inner container instead.
+  function mainScroller() {
+    let best = document.scrollingElement;
+    for (const el of document.querySelectorAll("*")) {
+      const oy = getComputedStyle(el).overflowY;
+      if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 50) {
+        if (el.scrollHeight > (best ? best.scrollHeight : 0)) best = el;
+      }
+    }
+    return best;
+  }
+
+  // Sites often show a resized copy of the real file. Look for the full-size
+  // one: the widest srcset candidate, a link around the image that points at
+  // an image file, or the usual lazy-loader attributes. Returns an absolute
+  // URL different from the displayed one, or null if nothing better is found.
+  function originalImageUrl(img, shown) {
+    const abs = (u) => { try { return new URL(u, location.href).href; } catch { return null; } };
+    const cands = [];
+    const srcset = img.getAttribute("srcset");
+    if (srcset) {
+      let best = null;
+      for (const part of srcset.split(",")) {
+        const [u, d] = part.trim().split(/\s+/);
+        const w = d ? parseFloat(d) : 0;
+        if (u && (!best || w > best.w)) best = { u, w };
+      }
+      if (best) cands.push(best.u);
+    }
+    for (const attr of ["data-original", "data-full", "data-full-url", "data-large-file", "data-orig-file", "data-zoom-src", "data-src"]) {
+      const v = img.getAttribute(attr);
+      if (v) cands.push(v);
+    }
+    const a = img.closest("a[href]");
+    if (a && /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|#|$)/i.test(a.getAttribute("href"))) cands.push(a.getAttribute("href"));
+    for (const c of cands) {
+      const u = abs(c);
+      if (u && u !== shown) return u;
+    }
+    return null;
+  }
+
+  function collectImages(selector, minSize, into) {
+    for (const img of document.querySelectorAll(selector)) {
+      if (img.tagName !== "IMG") continue;
+      const url = img.currentSrc || img.src;
+      if (!url || into.has(url) || !img.complete || !img.naturalWidth) continue;
+      if (img.naturalWidth < minSize || img.naturalHeight < minSize) continue;
+      const entry = { url, width: img.naturalWidth, height: img.naturalHeight, alt: img.alt || "" };
+      const original = originalImageUrl(img, url);
+      if (original) entry.originalUrl = original;
+      into.set(url, entry);
+    }
+  }
+
+  // Loaded <img>s matching `selector`, one per URL. With `scroll`, walks the
+  // main scroller top to bottom so lazy/virtualized images render, collecting
+  // as it goes, then puts the scroll position back.
+  async function listImages({ selector = "img", minSize = 0, scroll = false } = {}) {
+    const found = new Map();
+    if (!scroll) {
+      collectImages(selector, minSize, found);
+    } else {
+      const sc = mainScroller();
+      const start = sc.scrollTop;
+      sc.scrollTop = 0;
+      await sleep(300);
+      const step = Math.max(200, Math.floor(sc.clientHeight * 0.6));
+      for (let y = 0; y <= sc.scrollHeight; y += step) {
+        sc.scrollTop = y;
+        await sleep(300);
+        collectImages(selector, minSize, found);
+      }
+      sc.scrollTop = start;
+    }
+    return [...found.values()].map((f, i) => ({ index: i + 1, ...f }));
+  }
+
+  // Fallback when the service worker can't fetch an image: reload it with
+  // crossOrigin="anonymous" (a clean canvas, if the host sends CORS headers)
+  // and export a PNG.
+  async function imageViaCanvas(url) {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    await new Promise((ok, no) => {
+      img.onload = ok;
+      img.onerror = () => no(new Error("image failed to load"));
+      img.src = url;
+    });
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.getContext("2d").drawImage(img, 0, 0);
+    return c.toDataURL("image/png");
+  }
+
+  const cleanText =(text) => String(text || "").replace(/\s+/g, " ").trim();
 
   function isDisplayed(el, { minSize = 2 } = {}) {
     if (!el) return false;
@@ -897,6 +1013,13 @@
     },
     reactPress: (el, key) => reactOp(el, "press", key),
     isReact: isReactPage,
+
+    // The core `images` command: bsc.images({ selector, minSize, scroll, index, urls, download }).
+    // Without download it lists the page's <img>s; with download: true each item
+    // also carries dataUrl (the full-size original, fetched by the service worker)
+    // or error. A plugin can't write files, so it returns these in its result.
+    images: (opts = {}) => bscCommand("page.images", opts),
+
     // Any function of the page's React probe: bsc.react.controls(), .inspect("Cart"), .fill("#q", "x") ...
     react: new Proxy(
       { call: bscReactCall },
@@ -1000,11 +1123,23 @@
       case "text":
         reply(() => ({ title: document.title, url: location.href, text: visibleText() }));
         break;
+      case "images":
+        reply(() => listImages(message));
+        break;
+      case "imageCanvas":
+        reply(() => imageViaCanvas(message.url));
+        break;
       case "click":
         reply(() => click(message.ref));
         break;
       case "type":
         reply(() => type(message.ref, message.text ?? "", Boolean(message.submit)));
+        break;
+      case "focusOnly":
+        reply(() => focusOnly(message.ref));
+        break;
+      case "fieldValue":
+        reply(() => readFieldValue(message.ref));
         break;
       case "press":
         reply(() => press(message.key));
