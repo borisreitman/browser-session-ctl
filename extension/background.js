@@ -697,6 +697,77 @@ async function typeTrusted(tab, ref, text, { clear, submit }) {
   return { ref, value: after.value };
 }
 
+// page.scroll changes scroll positions from the page (window.scrollBy). Some apps ignore
+// that: they load more content from a real wheel/touch gesture, or an IntersectionObserver
+// that only fires for user-driven scrolling. page.scrollTrusted sends mouseWheel events
+// through the Chrome DevTools Protocol at a point (the centre of a ref/selector/the
+// viewport), so Chrome generates them and the page cannot tell them from a person.
+// Like typeTrusted it attaches chrome.debugger for the call and detaches right after.
+const WHEEL_MAX_EVENTS = 2000;
+
+async function scrollTrusted(tab, params) {
+  const target = { ref: params.ref, selector: params.selector };
+  if (!target.ref && params.name) {
+    target.ref = unwrap(await sendToPage(tab, { action: "find", name: params.name })).ref;
+  }
+  const point = unwrap(await sendToPage(tab, { action: "scrollPoint", ...target }));
+  const x = params.x ?? point.x;
+  const y = params.y ?? point.y;
+
+  const dir = String(params.direction || "down").toLowerCase();
+  if (!["up", "down", "left", "right"].includes(dir)) throw new Error(`direction must be up, down, left or right (got "${dir}")`);
+  const amount = Math.max(1, Number(params.amount ?? 600));
+  const step = Math.max(1, Number(params.step ?? 120)); // one wheel notch
+  const delay = Math.max(0, Number(params.delay ?? 12));
+  const sign = dir === "up" || dir === "left" ? -1 : 1;
+  const horizontal = dir === "left" || dir === "right";
+  const events = Math.min(WHEEL_MAX_EVENTS, Math.ceil(amount / step));
+
+  const debuggee = { tabId: tab.id };
+  let attached = false;
+  let sent = 0;
+  try {
+    await chrome.debugger.attach(debuggee, "1.3");
+    attached = true;
+    await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    for (let i = 0; i < events; i += 1) {
+      const d = sign * Math.min(step, amount - i * step);
+      await chrome.debugger.sendCommand(debuggee, "Input.dispatchMouseEvent", {
+        type: "mouseWheel",
+        x,
+        y,
+        deltaX: horizontal ? d : 0,
+        deltaY: horizontal ? 0 : d,
+      });
+      sent += 1;
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    // Let the page react (smooth scrolling, lazy loads) before reading back.
+    await new Promise((resolve) => setTimeout(resolve, params.settle ?? 150));
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {
+        // Already detached (e.g. the tab closed mid-call).
+      }
+    }
+  }
+  const after = unwrap(await sendToPage(tab, { action: "scrollPoint", ...target }));
+  const key = horizontal ? "scrollLeft" : "scrollTop";
+  return {
+    x,
+    y,
+    direction: dir,
+    wheelEvents: sent,
+    scroller: point.scroller,
+    before: { scrollTop: point.scrollTop, scrollLeft: point.scrollLeft, scrollHeight: point.scrollHeight },
+    after: { scrollTop: after.scrollTop, scrollLeft: after.scrollLeft, scrollHeight: after.scrollHeight },
+    moved: after[key] - point[key],
+    grew: after.scrollHeight - point.scrollHeight,
+  };
+}
+
 function runInPage(tab, args, func) {
   return chrome.scripting.executeScript({
     target: { tabId: tab.id },
@@ -1061,6 +1132,11 @@ async function handleCommand(message) {
       });
     }
 
+    case "page.scrollTrusted": {
+      const tab = await tabById(params.tabId);
+      return scrollTrusted(tab, params);
+    }
+
     case "page.annotate": {
       const tab = await tabById(params.tabId);
       const enabled = params.enabled !== false;
@@ -1263,7 +1339,7 @@ async function handleCommand(message) {
 
 const PLUGIN_COMMANDS = new Set([
   "page.snapshot", "page.text", "page.options", "page.click", "page.type", "page.press",
-  "page.scroll", "page.status", "page.annotate", "react.call", "angular.call", "page.images",
+  "page.scroll", "page.scrollTrusted", "page.status", "page.annotate", "react.call", "angular.call", "page.images",
 ]);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

@@ -154,6 +154,16 @@ browser-session-ctl type-trusted e51 "more text" --no-clear
 
 It briefly attaches `chrome.debugger` to the tab for the call (you'll see Chrome's "is being debugged" bar) and detaches right after. Reach for `type` first; only fall back to `type-trusted` once you've confirmed a field is actually reverting `type`'s input.
 
+`scroll-trusted` is the same idea for scrolling: it sends real mouse-wheel events through the DevTools Protocol, for panes that load more (infinite scroll, chat history) only on a genuine wheel gesture and ignore `scroll` / `scrollTop` changes. It wheels over the centre of `--selector`, `--ref` or `--name` (default: the viewport) and reports the scroller's position before and after. Plugins call `bsc.scrollTrusted({ selector, direction, amount })`.
+
+```bash
+browser-session-ctl scroll-trusted up 3000 --selector '#story-viewport'
+browser-session-ctl scroll-trusted down            # 600px over the middle of the page
+browser-session-ctl scroll-trusted right 400 --ref e12 --step 80
+```
+
+`moved` is the change in the scroller's `scrollTop` (`scrollLeft` for left/right), and `grew` is how much its `scrollHeight` increased, a handy "did it load more?" signal. A chat-style pane can have a negative `scrollTop` (0 is the newest end), so up is more negative there. Needs the tab visible, like all input commands.
+
 `open [url]` creates a new tab and prints its `id` right away, so you can target it with `--tab <id>` on the very next command without first running `tabs` to look it up. Add `--background` to open it without switching focus. If the currently active tab is blank (`about:blank` or a fresh new-tab page), it reuses that tab instead of opening another one. By default it also turns `annotate` on for the page it opens — see `config annotate-new-tabs` below to change that.
 
 ```bash
@@ -229,6 +239,7 @@ This repo ships these in `plugins/` (auto runtime-loaded on first use, inject-lo
 - **upwork** — search Upwork freelancers (keywords, hourly rate, badge, country) and read the result tiles. Read-only. Writeup: [doc/upwork.md](doc/upwork.md).
 - **dollar** — dollar.com helpers: dismiss the email opt-in popup, read Locations search results. Writeup: [doc/dollar.md](doc/dollar.md).
 - **jewishgen** — fill and submit JewishGen Global Search (surname, given name, town, region, match type) and read the partner links; record rows need a signed-in account. Read-only. Writeup: [doc/jewishgen.md](doc/jewishgen.md).
+- **upwork-messages** — read and search Upwork Messages: list rooms, load a whole conversation (older history included), export every room, and find text across them. Read-only. Writeup: [doc/upwork-messages.md](doc/upwork-messages.md).
 - **egged** — plan Israeli bus trips with Egged's journey planner (geocode places, search, read itineraries). Writeup: [doc/egged.md](doc/egged.md).
 
 ```bash

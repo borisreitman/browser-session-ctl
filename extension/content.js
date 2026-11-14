@@ -653,6 +653,58 @@
     return { ref, value: fieldValue(requireEl(ref)) };
   }
 
+  // Where a trusted (CDP) mouse wheel should land, plus the scroll position of whatever
+  // scrolls there, so the caller can report before/after. The target is a ref, a CSS
+  // selector, or nothing (the middle of the viewport). An element target is first
+  // scrolled into view, because CDP wheel events are positional.
+  function scrollPoint({ ref, selector }) {
+    let el = null;
+    if (ref) el = requireEl(ref);
+    else if (selector) {
+      el = document.querySelector(selector);
+      if (!el) throw new Error(`No element matches "${selector}"`);
+    }
+    if (el) el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+    let x = Math.round(innerWidth / 2);
+    let y = Math.round(innerHeight / 2);
+    if (el) {
+      const r = el.getBoundingClientRect();
+      const left = Math.max(r.left, 0);
+      const right = Math.min(r.right, innerWidth);
+      const top = Math.max(r.top, 0);
+      const bottom = Math.min(r.bottom, innerHeight);
+      if (right <= left || bottom <= top) throw new Error("The target is not visible in the viewport");
+      x = Math.round((left + right) / 2);
+      y = Math.round((top + bottom) / 2);
+    }
+    // The element the wheel will hit, and the nearest ancestor that can actually scroll.
+    let hit = document.elementFromPoint(x, y);
+    let scroller = null;
+    for (let e = hit; e && e !== document.documentElement; e = e.parentElement) {
+      const o = getComputedStyle(e);
+      const canY = /auto|scroll/.test(o.overflowY) && e.scrollHeight > e.clientHeight;
+      const canX = /auto|scroll/.test(o.overflowX) && e.scrollWidth > e.clientWidth;
+      if (canY || canX) {
+        scroller = e;
+        break;
+      }
+    }
+    const s = scroller || document.scrollingElement || document.documentElement;
+    const label = scroller
+      ? `${scroller.tagName.toLowerCase()}${scroller.id ? "#" + scroller.id : ""}`
+      : "document";
+    return {
+      x,
+      y,
+      scroller: label,
+      scrollTop: Math.round(s.scrollTop),
+      scrollLeft: Math.round(s.scrollLeft),
+      scrollHeight: s.scrollHeight,
+      scrollWidth: s.scrollWidth,
+      clientHeight: s.clientHeight,
+    };
+  }
+
   async function compilePluginClass(code) {
     const source = `${code}\nexport default Plugin;\n`;
     const blobUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
@@ -1035,6 +1087,12 @@
     sleep, clean: cleanText, waitFor, isDisplayed, dates,
 
     // Page reads and the extension's own commands.
+    // Real mouse-wheel input from Chrome itself (isTrusted), for panes that ignore
+    // scrollTop changes and synthetic wheel events. Async. Briefly attaches the debugger.
+    //   await bsc.scrollTrusted({ selector: "#story-viewport", direction: "up", amount: 4000 })
+    // Returns { x, y, scroller, before, after, moved }. Note: chat-style panes can
+    // use a negative scrollTop (0 is the newest end), so read `moved`, not the sign.
+    scrollTrusted: (opts = {}) => bscCommand("page.scrollTrusted", opts),
     command: bscCommand, // page-level only: page.* and react.call
     status: () => bscCommand("page.status"),
     snapshot: async () => snapshot(),
@@ -1137,6 +1195,9 @@
         break;
       case "focusOnly":
         reply(() => focusOnly(message.ref));
+        break;
+      case "scrollPoint":
+        reply(() => scrollPoint({ ref: message.ref, selector: message.selector }));
         break;
       case "fieldValue":
         reply(() => readFieldValue(message.ref));

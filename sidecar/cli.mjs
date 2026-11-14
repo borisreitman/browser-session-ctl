@@ -38,6 +38,7 @@ Usage:
   browser-session-ctl type-trusted <ref|name> <text> [--submit] [--no-clear]
   browser-session-ctl press <key>
   browser-session-ctl scroll [up|down]
+  browser-session-ctl scroll-trusted [up|down|left|right] [amount] [--selector CSS | --ref eN | --name TEXT] [--step N] [--delay MS]
   browser-session-ctl screenshot [path]
   browser-session-ctl images [--selector CSS] [--min-size N] [--index I,J] [--scroll] [--save DIR] [--prefix NAME]
   browser-session-ctl annotate [on|off]
@@ -64,6 +65,14 @@ Usage:
             is connected. \`profiles\` lists them; rename in the extension popup.
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
+
+scroll-trusted sends real mouse-wheel events through the Chrome DevTools Protocol
+(isTrusted), for panes that ignore \`scroll\` / scrollTop changes and only load
+more (infinite scroll, chat history) on a genuine wheel gesture. It wheels over the
+centre of --selector/--ref/--name (default: the viewport), by [amount] px (default
+600) in --step px notches, and reports the scroller's position before and after
+(\`moved\`; a chat-style pane can have a negative scrollTop, where up is more
+negative). Briefly attaches the debugger, like type-trusted.
 
 type-trusted types via the Chrome DevTools Protocol (real key events, not
 page-script dispatchEvent), for fields that ignore synthetic input from
@@ -423,6 +432,26 @@ async function main(argv) {
       const key = rest[0];
       if (!key) throw new Error("key is required");
       printResult(await command("page.press", withTab({ key }, tabId)));
+      return;
+    }
+    case "scroll-trusted": {
+      const p = {};
+      const rest2 = [...rest];
+      const valued = { "--selector": "selector", "--ref": "ref", "--name": "name", "--step": "step", "--delay": "delay", "--x": "x", "--y": "y" };
+      for (let i = 0; i < rest2.length; i += 1) {
+        const a = rest2[i];
+        if (valued[a]) {
+          p[valued[a]] = ["step", "delay", "x", "y"].includes(valued[a]) ? Number(rest2[i + 1]) : rest2[i + 1];
+          rest2.splice(i, 2);
+          i -= 1;
+        }
+      }
+      for (const a of rest2) {
+        if (/^(up|down|left|right)$/i.test(a)) p.direction = a.toLowerCase();
+        else if (/^\d+(\.\d+)?$/.test(a)) p.amount = Number(a);
+        else throw new Error(`scroll-trusted: unexpected argument "${a}"`);
+      }
+      printResult(await command("page.scrollTrusted", withTab(p, tabId)));
       return;
     }
     case "scroll":
