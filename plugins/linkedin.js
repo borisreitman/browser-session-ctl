@@ -32,6 +32,8 @@ class Plugin {
           "post <open|draft|status> — post as the selected Page. open navigates to its composer; draft <text...> types the text into the open composer and stops (it does NOT click Post); status shows who the composer posts as and its current text.",
         connections:
           "connections <go|list> — your own 1st-degree connections. go navigates this tab to the connections page (page unloads); list [--limit N] [--seconds S] scrolls the lazy list (foreground tab; ~20s per call, repeat until complete is true) and returns {total, count, complete, connections:[{name, headline, connected, url}]}.",
+        invite:
+          "invite <open|search|select|status|send> — invite your 1st-degree connections to follow the selected Page (costs one credit each). open navigates to the Page's invite dialog and resets the selection (page unloads); search <name> reads the matching connections ({name, degree, headline, selected}); select <name> ticks exactly one connection by exact name and verifies it against the Invite button's counter (error if zero or several match); status shows the counter and credits; send --yes clicks Invite for everyone ticked (without --yes it only reports what it would send). Each call has ~30s, so select one name per call.",
         status: "status — what page this is: url, whether it is a people search, signed in, result count.",
       },
     };
@@ -321,6 +323,113 @@ class Plugin {
     let people = this.cards().map((c) => this.parseCard(c));
     if (flags.limit) people = people.slice(0, Number(flags.limit));
     return { page: this.status().page, count: people.length, people };
+  }
+
+  // ---- Invite connections to follow the selected Page ----------------------
+
+  // plugin.linkedin invite <open|search|select|status|send> ...
+  async invite(action, ...args) {
+    if (action === "open") return this.inviteOpen();
+    if (action === "search") return this.inviteSearch(args.join(" "));
+    if (action === "select") return this.inviteSelect(args.join(" "));
+    if (action === "status") return this.inviteStatus();
+    if (action === "send") return this.inviteSend(args);
+    throw new Error(`invite needs a subcommand: open, search, select, status, send (got ${action || "none"})`);
+  }
+
+  // Navigating reloads the page, which also clears any ticked connections.
+  inviteOpen() {
+    const page = this.selectedPage();
+    const url = `https://www.linkedin.com/company/${page.id}/admin/dashboard/?invite=true`;
+    setTimeout(() => location.assign(url), 50);
+    return { page, navigating: true, url };
+  }
+
+  fold(text) {
+    return this.clean(text).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  }
+
+  inviteBox() {
+    return document.querySelector('[role="combobox"][aria-label*="Search by name"], input[aria-label*="Search by name"]');
+  }
+
+  inviteButton() {
+    return [...document.querySelectorAll("button")].find((b) => /^Invite( \d+)?$/.test(this.clean(b.textContent)));
+  }
+
+  inviteCount() {
+    const b = this.inviteButton();
+    const m = b && this.clean(b.textContent).match(/^Invite (\d+)$/);
+    return m ? Number(m[1]) : 0;
+  }
+
+  // One entry per connection in the dialog: the row's label reads "Select <name>" or "Selected <name>".
+  inviteRows() {
+    return [...document.querySelectorAll('[role="option"]')]
+      .map((el) => {
+        const label = el.querySelector("label");
+        const m = label && this.clean(label.textContent).match(/^(Select|Selected) (.+)$/);
+        const text = this.clean(el.textContent);
+        const deg = text.match(/\b(1st|2nd|3rd\+?)\b/);
+        if (!m || !deg) return null;
+        const rest = text.slice(text.indexOf(deg[1]) + deg[1].length).replace(/^\s*•\s*/, "");
+        const tag = this.clean(label.textContent);
+        const headline = rest.endsWith(tag) ? rest.slice(0, -tag.length).trim() : rest;
+        return { el, label, name: m[2], degree: deg[1], headline, selected: m[1] === "Selected" };
+      })
+      .filter(Boolean);
+  }
+
+  async inviteSearch(name) {
+    if (!name) throw new Error("invite search needs a name");
+    const box = await bsc.waitFor(() => this.inviteBox(), 20, 250);
+    if (!box) throw new Error('Invite dialog is not open; run "page select" then "invite open"');
+    // Type only the Latin part of a name (typing CJK characters hangs the box); matching on the full name still happens in select.
+    const query = name.replace(/[^\x00-\x7F]/g, "").trim() || name;
+    bsc.fill(box, query, { clear: true, typing: true });
+    const want = this.fold(query);
+    // The list is replaced asynchronously; wait until a row for this name shows up (or give up and return what is there).
+    await bsc.waitFor(() => this.inviteRows().some((r) => this.fold(r.name).includes(want)), 16, 250);
+    await this.sleep(300);
+    return this.inviteRows().map(({ el, label, ...rest }) => rest);
+  }
+
+  async inviteSelect(name) {
+    const rows = await this.inviteSearch(name);
+    const want = this.fold(name);
+    const hits = rows.filter((r) => this.fold(r.name) === want);
+    if (hits.length !== 1) {
+      throw new Error(`${hits.length ? "Ambiguous" : "No exact match"} for "${name}"; candidates: ${rows.map((r) => `${r.name} (${r.headline.slice(0, 40)})`).join("; ") || "(none)"}`);
+    }
+    if (hits[0].selected) return { name: hits[0].name, selected: true, already: true, count: this.inviteCount() };
+    const before = this.inviteCount();
+    const row = this.inviteRows().find((r) => this.fold(r.name) === want);
+    // One native click: bsc.click also fires synthetic events first, which toggles the checkbox twice.
+    row.label.click();
+    const ok = await bsc.waitFor(() => this.inviteCount() > before, 12, 250);
+    if (!ok) throw new Error(`Clicking "${hits[0].name}" did not raise the Invite counter (still ${this.inviteCount()})`);
+    return { name: hits[0].name, selected: true, count: this.inviteCount() };
+  }
+
+  inviteStatus() {
+    const credits = document.body.innerText.match(/(\d+)\/(\d+) credits available/);
+    return {
+      dialogOpen: !!this.inviteBox(),
+      selected: this.inviteCount(),
+      creditsAvailable: credits ? Number(credits[1]) : null,
+      creditsTotal: credits ? Number(credits[2]) : null,
+    };
+  }
+
+  // Sends the invitations. Each one costs a credit and cannot be recalled, so it needs an explicit --yes.
+  async inviteSend(args) {
+    const count = this.inviteCount();
+    if (!count) throw new Error("Nobody is selected");
+    if (!args.includes("--yes")) return { sent: false, wouldInvite: count, hint: "run again with --yes to send" };
+    const btn = this.inviteButton();
+    bsc.click(btn);
+    await this.sleep(1500);
+    return { clicked: true, invited: count, status: this.inviteStatus() };
   }
 
   // ---- Your own connections -----------------------------------------------
