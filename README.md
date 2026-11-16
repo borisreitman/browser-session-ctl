@@ -241,6 +241,7 @@ This repo ships these in `plugins/` (auto runtime-loaded on first use, inject-lo
 - **jewishgen** — fill and submit JewishGen Global Search (surname, given name, town, region, match type) and read the partner links; record rows need a signed-in account. Read-only. Writeup: [doc/jewishgen.md](doc/jewishgen.md).
 - **upwork-messages** — read and search Upwork Messages: list rooms, load a whole conversation (older history included), export every room, and find text across them. Read-only. Writeup: [doc/upwork-messages.md](doc/upwork-messages.md).
 - **egged** — plan Israeli bus trips with Egged's journey planner (geocode places, search, read itineraries). Writeup: [doc/egged.md](doc/egged.md).
+- **facebook** — list a post's photos and walk its photo viewer to collect every full-size image (including ones hidden behind "+N"); pair with `images --url … --save` to download. Videos are skipped. Read-only. Writeup: [doc/facebook.md](doc/facebook.md).
 
 ```bash
 browser-session-ctl plugin.<namespace> <method> [args...]
