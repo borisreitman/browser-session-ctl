@@ -4,9 +4,9 @@
 //
 // Returns the whole thread as one JSON object: {title, url, pages, count, posts[]}.
 //
-// Read-only. Written against hbletter.com (HBL), which runs bbPress with a custom
-// "hbl-post-card" theme, but it also falls back to stock bbPress markup
-// (.bbp-topic-content / .bbp-reply-content inside .type-topic / .type-reply).
+// Read-only. Targets stock bbPress markup (.bbp-topic-content / .bbp-reply-content
+// inside .type-topic / .type-reply). A themed site subclasses this and overrides
+// `selectors()` (see plugins/hbl.js, which has `// @requires bbpress`).
 //
 // Pagination: do NOT trust the ".bbp-pagination" links on an HBL topic page. They
 // describe the forum's topic list (143 pages), not the replies. On a one-page
@@ -45,8 +45,23 @@ class Plugin {
     return String(s || "").replace(/\s+/g, " ").trim();
   }
 
+  // Where a post's author, date and the topic title live. Subclasses override this;
+  // each value is a CSS selector list searched inside the post's card.
+  selectors() {
+    return {
+      author: ".bbp-author-name",
+      date: ".bbp-reply-post-date, .bbp-topic-post-date",
+      title: ".bbp-topic-title, .bbp-topic-permalink",
+    };
+  }
+
+  // Extra fields a subclass wants on every post. Called with (card, head, doc).
+  extra() {
+    return {};
+  }
+
   threadTitle(doc) {
-    const t = doc.querySelector(".hbl-post-card__title");
+    const t = doc.querySelector(this.selectors().title);
     if (t && this.clean(t.textContent)) return this.clean(t.textContent);
     const h = doc.querySelector("h1");
     if (h && this.clean(h.textContent)) return this.clean(h.textContent);
@@ -138,6 +153,7 @@ class Plugin {
   parse(doc) {
     const posts = [];
     const seen = new Set();
+    const sel = this.selectors();
     for (const body of doc.querySelectorAll(".bbp-topic-content, .bbp-reply-content")) {
       const card = body.closest("[class*='type-reply'], [class*='type-topic']") || body.parentElement;
       const id = (String(card.className).match(/\bpost-(\d+)\b/) || [])[1] || (String(card.id).match(/\d+/) || [])[0];
@@ -146,8 +162,8 @@ class Plugin {
       const kind = body.classList.contains("bbp-topic-content") ? "topic" : "reply";
       const head = doc.getElementById(`post-${id}`) || card;
       const pick = (root, sel) => { const e = root.querySelector(sel); return e ? this.clean(e.textContent) : ""; };
-      const author = pick(card, ".hbl-post-card__author, .bbp-author-name") || pick(head, ".bbp-author-name");
-      const date = pick(card, ".hbl-post-card__date") || pick(head, ".bbp-reply-post-date, .bbp-topic-post-date") || pick(card, ".bbp-reply-post-date, .bbp-topic-post-date");
+      const author = pick(card, sel.author) || pick(head, sel.author);
+      const date = pick(card, sel.date) || pick(head, sel.date);
       const link = head.querySelector("a.bbp-reply-permalink, a.bbp-topic-permalink");
       posts.push({
         id,
@@ -157,6 +173,7 @@ class Plugin {
         iso: this.iso(date),
         permalink: link ? link.href : `${this.baseUrl()}#post-${id}`,
         markdown: this.body(body),
+        ...this.extra(card, head, doc),
       });
     }
     return posts;

@@ -41,6 +41,17 @@ Chrome cannot `eval` / `new Function` plugin source in the content-script world,
 - The persisted **source** stays until `plugin-unload`.
 - Changing `extension/` (not `plugins/`) still needs an extension reload, then use the new version number on the card.
 
+## Building one plugin on another (`@requires`)
+
+A plugin file may start with `// @requires <namespace>` lines. When the CLI writes the generated file it puts each required plugin (from `plugins/<namespace>.js`) in front, so the plugin can subclass it:
+
+```js
+// @requires bbpress
+class Plugin extends globalThis.__bscPluginExports.bbpress { ... }
+```
+
+`plugins/hbl.js` is the example. This works through the generated-file path of `plugin.<ns>` / `plugin-inject`; the in-page compile fallback (see "Why a generated file") does not bundle the base.
+
 ## The `bsc` API (core methods inside plugins)
 
 Plugins run in the extension's isolated world, which sees the page's DOM but not its JavaScript, so React internals and the page's own globals are invisible to them. Instead of reimplementing clicks, typing and waiting in every plugin, a plugin uses the global `bsc`, which is the same code the CLI uses.

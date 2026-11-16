@@ -1,6 +1,6 @@
 # bbpress plugin
 
-Read a bbPress forum thread (topic plus every reply) as JSON. Read-only. Written against hbletter.com (HBL), which runs bbPress with a custom `hbl-post-card` theme, and it falls back to stock bbPress markup (`.bbp-topic-content` / `.bbp-reply-content` inside `.type-topic` / `.type-reply`).
+Read a bbPress forum thread (topic plus every reply) as JSON. Read-only. It targets stock bbPress markup (`.bbp-topic-content` / `.bbp-reply-content` inside `.type-topic` / `.type-reply`). A themed site subclasses it: override `selectors()` (author, date, title) and optionally `extra(card, head, doc)` for more fields. [hbl](hbl.md) is the worked example.
 
 Source: `plugins/bbpress.js`. First `plugin.bbpress ...` auto-loads it. Point `--tab` at a thread tab where you are signed in.
 

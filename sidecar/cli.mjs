@@ -251,10 +251,26 @@ ${code}
 `;
 }
 
+// A plugin may start with `// @requires <namespace>` lines. The generated file then carries each
+// required plugin first (wrapped, so it registers in __bscPluginExports), letting
+// `class Plugin extends globalThis.__bscPluginExports.<namespace>` work.
+async function wrapWithRequires(namespace, code, seen = new Set()) {
+  seen.add(namespace);
+  let out = "";
+  for (const m of code.matchAll(/^\/\/ @requires\s+([A-Za-z0-9-]+)\s*$/gm)) {
+    const dep = m[1];
+    if (seen.has(dep)) continue;
+    const depCode = await repoPluginCode(dep);
+    if (!depCode) throw new Error(`Plugin "${namespace}" requires "${dep}", but plugins/${dep}.js is missing.`);
+    out += await wrapWithRequires(dep, depCode, seen);
+  }
+  return out + wrapRuntimePlugin(namespace, code);
+}
+
 async function writeRuntimePlugin(namespace, code) {
   requireNamespace(namespace);
   await mkdir(RUNTIME_PLUGINS_DIR, { recursive: true });
-  await writeFile(join(RUNTIME_PLUGINS_DIR, `${namespace}.js`), wrapRuntimePlugin(namespace, code), "utf8");
+  await writeFile(join(RUNTIME_PLUGINS_DIR, `${namespace}.js`), await wrapWithRequires(namespace, code), "utf8");
 }
 
 async function removeRuntimePlugin(namespace) {
