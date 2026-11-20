@@ -16,8 +16,11 @@
 // change detection and pending requests have settled, so every step waits on
 // the framework instead of a guessed sleep.
 //
-// Read-only: it runs searches and reads the results. It never creates a plan,
-// saves keywords, or touches a campaign.
+// Keyword Planner methods are read-only: they run searches and read the
+// results, and never create a plan, save keywords, or touch a campaign.
+// Two general helpers work on any ads.google.com page: `reveal` only scrolls,
+// but `fill` WRITES into a form field (it saves nothing by itself; the page's
+// own Save/Done buttons still have to be clicked).
 class Plugin {
   help() {
     return {
@@ -35,15 +38,20 @@ class Plugin {
         stable: "stable — wait for Angular to settle and report whether it did (debug).",
         reveal:
           "reveal <text...> — scroll the smallest element whose text contains <text> into view, inside whatever nested scroller holds it (the campaign wizard scrolls an inner panel that plain `scroll` can't reach). Works on any ads.google.com page; changes nothing but the viewport.",
+        fill:
+          'fill <label> <index> <value...> — WRITES: set the Nth (0-based) input/textarea whose placeholder, aria-label or label starts with <label>, even when scrolled off screen (the wizard\'s repeated Headline/Description fields, the "Enter or paste keywords" box). Replaces the field\'s whole value.',
       },
     };
   }
 
   // Set the Nth (0-based) text input or textarea whose placeholder, aria-label
-  // or label text equals `label` (case-insensitive), even if it is scrolled out
-  // of view. Needed for the campaign wizard's repeated "Headline" / "Description"
-  // fields, which `snapshot` doesn't list while they are off screen.
+  // or label text STARTS WITH `label` (case-insensitive), even if it is scrolled
+  // out of view. Needed for the campaign wizard's repeated "Headline" /
+  // "Description" fields, which `snapshot` doesn't list while they are off
+  // screen. It WRITES: it replaces whatever the field held, and there is no
+  // read-only mode, so never call it just to inspect a field.
   // Usage: fill Headline 2 "Supports Anthem Liberty"
+  //        fill "Enter or paste" 0 '"keyword one"<newline>"keyword two"'
   async fill(label, index, ...valueParts) {
     const want = String(label).trim().toLowerCase();
     const i = Number(index);
