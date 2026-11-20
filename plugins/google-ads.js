@@ -75,6 +75,22 @@ class Plugin {
     return { ok: true, label, index: i, value: el.value, candidates: els.length };
   }
 
+  // Click the <a> whose visible text equals `text` (case-insensitive) and
+  // report its href. Plain `click <text>` takes the first element containing the
+  // text, which is often a same-named "Edit this ..." button, not the link.
+  // Usage: follow "ALF - Shop button click"
+  follow(...parts) {
+    const want = parts.join(" ").trim().toLowerCase();
+    const links = [...document.querySelectorAll("a")].filter(
+      (a) => (a.textContent || "").trim().toLowerCase() === want && a.getBoundingClientRect().width > 0
+    );
+    const a = links[0];
+    if (!a) return { ok: false, text: want, candidates: 0 };
+    const href = a.getAttribute("href");
+    bsc.fireClick(a);
+    return { ok: true, href, candidates: links.length };
+  }
+
   // ---- viewport --------------------------------------------------------------
 
   // Find the smallest visible-or-hidden element whose own subtree text contains
