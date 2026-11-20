@@ -33,7 +33,64 @@ class Plugin {
         sort: "sort <column...> — click a sortable column header (label or essfield), e.g. sort Avg. monthly searches.",
         open: "open — go back to the Keyword Planner start screen without reloading the page.",
         stable: "stable — wait for Angular to settle and report whether it did (debug).",
+        reveal:
+          "reveal <text...> — scroll the smallest element whose text contains <text> into view, inside whatever nested scroller holds it (the campaign wizard scrolls an inner panel that plain `scroll` can't reach). Works on any ads.google.com page; changes nothing but the viewport.",
       },
+    };
+  }
+
+  // Set the Nth (0-based) text input or textarea whose placeholder, aria-label
+  // or label text equals `label` (case-insensitive), even if it is scrolled out
+  // of view. Needed for the campaign wizard's repeated "Headline" / "Description"
+  // fields, which `snapshot` doesn't list while they are off screen.
+  // Usage: fill Headline 2 "Supports Anthem Liberty"
+  async fill(label, index, ...valueParts) {
+    const want = String(label).trim().toLowerCase();
+    const i = Number(index);
+    const value = valueParts.join(" ");
+    const name = (el) =>
+      (
+        el.getAttribute("aria-label") ||
+        el.getAttribute("placeholder") ||
+        el.closest("material-input, .input-container")?.textContent ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+    const els = [...document.querySelectorAll("input, textarea")].filter(
+      (el) => el.type !== "hidden" && name(el).startsWith(want)
+    );
+    const el = els[i];
+    if (!el) return { ok: false, label, index: i, candidates: els.length };
+    el.scrollIntoView({ block: "center" });
+    await bsc.fill(el, value);
+    return { ok: true, label, index: i, value: el.value, candidates: els.length };
+  }
+
+  // ---- viewport --------------------------------------------------------------
+
+  // Find the smallest visible-or-hidden element whose own subtree text contains
+  // `text`, and scrollIntoView it. Returns what it found so the caller can then
+  // `snapshot` and click the controls that were below the fold.
+  reveal(...parts) {
+    const text = parts.join(" ").trim().toLowerCase();
+    if (!text) throw new Error("reveal needs some text to look for");
+    let best = null;
+    for (const el of document.querySelectorAll("body *")) {
+      if (el.children.length > 8) continue; // skip big containers
+      const t = (el.textContent || "").trim().toLowerCase();
+      if (!t || !t.includes(text)) continue;
+      if (!best || t.length < best.t.length) best = { el, t };
+    }
+    if (!best) return { found: false, text };
+    best.el.scrollIntoView({ block: "center", inline: "nearest" });
+    const r = best.el.getBoundingClientRect();
+    return {
+      found: true,
+      tag: best.el.tagName.toLowerCase(),
+      text: best.t.slice(0, 80),
+      top: Math.round(r.top),
+      left: Math.round(r.left),
     };
   }
 
