@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "browser-session-ctl",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Lets a local agent drive this Chrome session on any website.",
   "permissions": [
     "tabs",
@@ -27,6 +27,19 @@
       "js": ["react-hook.js"],
       "run_at": "document_start",
       "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["http://*/*", "https://*/*", "file:///*"],
+      "js": ["console-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["http://*/*", "https://*/*", "file:///*"],
+      "js": ["console-bridge.js"],
+      "run_at": "document_start",
       "all_frames": false
     },
     {

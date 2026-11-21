@@ -132,6 +132,7 @@ browser-session-ctl type e2 hello@example.com
 browser-session-ctl press Enter
 browser-session-ctl text
 browser-session-ctl screenshot /tmp/page.png
+browser-session-ctl console --text
 ```
 
 `images` lists the page's loaded `<img>`s (`index`, `url`, `width`, `height`, `alt`), and with `--save DIR` downloads each **original file** into `DIR` as `image-<index>.<ext>`:
@@ -207,6 +208,36 @@ browser-session-ctl config annotate-new-tabs
 browser-session-ctl config annotate-new-tabs off
 ```
 
+### Console output
+
+`console` prints what the tab's page logged, so you can check that a script ran, see why a request failed, or confirm what an integration (analytics, an SDK, a payment widget) did on a click. It captures:
+
+- `console.log` / `info` / `warn` / `error` / `debug` / `trace` / `assert`, with arguments formatted as DevTools would (objects, arrays, errors with stacks, `%s %d %c` substitution);
+- uncaught exceptions and **unhandled promise rejections**;
+- **failed resource loads**: a `<script>`, stylesheet or image that was blocked, 404'd or refused (this is how an ad blocker or a CSP shows up);
+- **Content-Security-Policy violations**.
+
+```bash
+browser-session-ctl console --text                          # everything this tab has logged
+browser-session-ctl console --level error,warn --text       # only problems
+browser-session-ctl console --grep gtag --text              # substring, or /regex/ (case-insensitive)
+browser-session-ctl console --since 42                      # only what is newer than seq 42
+browser-session-ctl console --wait 2000 --grep alf-track    # sleep 2s first, then read
+browser-session-ctl --tab 123456789 console --clear         # read another tab, then empty its log
+```
+
+Without `--text` the result is JSON: `{ tabId, url, total, returned, lastSeq, messages: [{ seq, time, level, text }] }`. Every message has a per-tab `seq`; pass the `lastSeq` of one call as `--since` to read only what is new. A message with `level: "page"` marks where each page load began.
+
+How it works, and what to expect:
+
+- **Recorded as it happens, no debugger bar.** A small hook runs in the page's own world at `document_start` and wraps the console methods (the original still runs), so output from the very first script is kept. It does not use `chrome.debugger`.
+- **The log survives navigation.** The extension keeps the last 1000 messages per tab, across page loads, so the output of a click that *leaves* the page is still there afterwards. It also survives the extension's service worker going to sleep, and is dropped when the tab closes.
+- **Tabs that were open before the extension loaded** have no hook yet. The first `console` call attaches it on demand and says so (`hookedLate`, plus a note); only output from then on is recorded. Reload the tab, or open the page fresh, to capture from page start.
+- **After `reload-extension`**, tabs that are already open keep working: the next `console` call re-attaches the forwarder and recovers what the page still has buffered (500 entries) without duplicates.
+- Top frame only (iframes are not captured). `console.table`, `dir`, `group`, `count` and `time` are not recorded. Page scripts can read and replace the hook, so treat the log as diagnostic, not as evidence against a hostile page. It is read from `http://`, `https://` and `file://` pages only.
+
+Plugins can read it too: `await bsc.console({ level: "error,warn", grep: "gtag", since: 40 })` returns the same object as the JSON output.
+
 JSON works too:
 
 ```bash
@@ -231,7 +262,7 @@ This repo ships these in `plugins/` (auto runtime-loaded on first use, inject-lo
 - **easyjet** — search easyjet.com flights by filling its homepage form, read the flight tiles, and follow partner routes to Connections by easyJet. Writeup: [doc/easyjet.md](doc/easyjet.md).
 - **allegiant** — search allegiantair.com directly (Allegiant is not on Expedia/eDreams), then read departing/returning flights. Writeup: [doc/allegiant.md](doc/allegiant.md).
 - **google-flights** — search Google Flights, sort cheapest/best/fastest, and read the departing-flight list. Writeup: [doc/google-flights.md](doc/google-flights.md).
-- **google-ads** — Google Ads Keyword Planner: run "Discover new keywords" searches (optionally filtered by a site), then read, sort and page through the ideas as records. Read-only. Writeup: [doc/google-ads.md](doc/google-ads.md).
+- **google-ads** — Google Ads Keyword Planner: run "Discover new keywords" searches (optionally filtered by a site), then read, sort and page through the ideas as records. The Keyword Planner methods are read-only; it also has three general helpers for any ads.google.com page (`reveal`, `fill`, `follow`), and `fill` writes into a form field. Writeup: [doc/google-ads.md](doc/google-ads.md).
 - **ryanair** — search Ryanair (`/trip/flights/select`), read outbound/return cards, pick a day or fare. Writeup: [doc/ryanair.md](doc/ryanair.md).
 - **notion** — search Notion, open a page, read its comments, and read a page's whole body as markdown (scrolls through Notion's lazily rendered blocks and opens collapsed toggles). Writeup: [doc/notion.md](doc/notion.md).
 - **kayak** — search Kayak rental cars by airport and dates, filter by car class, read every car with each booking site's total. Writeup: [doc/kayak.md](doc/kayak.md).
@@ -339,6 +370,14 @@ The tab is left open afterward for inspection. Set `CLOSE_TAB=1` to have the sui
 CLOSE_TAB=1 npm test
 ```
 
+The page side of console capture (`extension/console-hook.js` and `console-bridge.js`) has a unit test that needs no browser, extension or sidecar:
+
+```bash
+node tests/console-unit.mjs
+```
+
+It runs the real scripts in a sandbox and checks that the console still behaves, output is formatted correctly, errors, failed loads and rejections are recorded, and the bridge de-duplicates and replays. The background half (the per-tab log that survives navigation) is only covered live: reload the extension (`browser-session-ctl reload-extension`), open a page that logs, click a link to another page, and run `browser-session-ctl console --text`; both pages' output should be there.
+
 ## Render a trace
 
 A trace is a markdown log of commands, snapshot listings, and viewport screenshots (see [doc/demo-trace.md](doc/demo-trace.md)). Put images in a folder with the same name (`doc/demo-trace/`), then:
@@ -354,6 +393,7 @@ Or `npm run trace-render` to render every `doc/**/*.md`. Each source writes `<na
 - `http://`, `https://`, and `file://` tabs (the last needs **Allow access to file URLs** enabled for the extension, see Tests below). Chrome settings, `chrome://`/`edge://` pages, extension pages, the Web Store, and the PDF viewer are blocked by Chrome.
 - Extension clicks are not OS-level “trusted” input. Most sites work; a few bot-sensitive flows may ignore them.
 - Password field values are redacted in snapshots.
+- `console` records the top frame only, keeps 1000 messages per tab, and cannot recover output logged before it was attached to a tab (see [Console output](#console-output)).
 - The sidecar binds to localhost only. Do not expose port 8765.
 
 ## Why not Selenium?

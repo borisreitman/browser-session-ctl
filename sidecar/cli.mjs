@@ -40,6 +40,7 @@ Usage:
   browser-session-ctl scroll [up|down]
   browser-session-ctl scroll-trusted [up|down|left|right] [amount] [--selector CSS | --ref eN | --name TEXT] [--step N] [--delay MS]
   browser-session-ctl screenshot [path]
+  browser-session-ctl console [--level error,warn,...] [--grep TEXT|/regex/] [--since SEQ] [--limit N] [--wait MS] [--clear] [--text]
   browser-session-ctl images [--selector CSS] [--min-size N] [--index I,J] [--scroll] [--save DIR] [--prefix NAME]
   browser-session-ctl annotate [on|off]
   browser-session-ctl debug-set-favicon [on|off]
@@ -65,6 +66,20 @@ Usage:
             is connected. \`profiles\` lists them; rename in the extension popup.
 --tab <id>  Override the default and use this tab instead.
             Optional. Allowed anywhere. Use \`tabs\` to list ids.
+
+console prints what a tab's page logged: console.log/info/warn/error/debug/trace/assert,
+uncaught errors, failed script/CSS/image loads, unhandled promise rejections and CSP
+violations. The extension records them as they happen (no debugger bar) and keeps the
+last 1000 per tab ACROSS navigations, so the output of a click that leaves the page is
+still there afterwards. Each message has a per-tab \`seq\`; pass the \`lastSeq\` from one
+call as --since to read only what is new. A line \`level: "page"\` marks each page load.
+  --level   comma list of levels to keep (error, warn, info, log, debug, trace, page)
+  --grep    substring, or /regex/ (case-insensitive), matched against the text
+  --limit   newest N messages (default 200)     --wait MS   sleep first, then read
+  --clear   empty the tab's log after reading   --text      plain lines, not JSON
+Tabs open before the extension loaded are attached on first use and record from then
+on only; reload such a tab (or open the page fresh) to capture from page start. Only
+the top frame is captured.
 
 scroll-trusted sends real mouse-wheel events through the Chrome DevTools Protocol
 (isTrusted), for panes that ignore \`scroll\` / scrollTop changes and only load
@@ -98,6 +113,9 @@ Examples:
   browser-session-ctl config annotate-new-tabs
   browser-session-ctl config annotate-new-tabs off
   browser-session-ctl type-trusted e51 "Annhurst"
+  browser-session-ctl console --text
+  browser-session-ctl console --level error,warn --since 42
+  browser-session-ctl console --grep alf-track --text --wait 2000
   browser-session-ctl plugin.jupyter-notebook cells
   browser-session-ctl plugin-list
   browser-session-ctl plugin-load my-thing ./my-thing.js
@@ -468,6 +486,47 @@ async function main(argv) {
         else throw new Error(`scroll-trusted: unexpected argument "${a}"`);
       }
       printResult(await command("page.scrollTrusted", withTab(p, tabId)));
+      return;
+    }
+    case "console": {
+      const p = {};
+      const valued = { "--level": "level", "--grep": "grep", "--since": "since", "--limit": "limit", "--wait": "wait" };
+      let asText = false;
+      for (let i = 0; i < rest.length; i += 1) {
+        const a = rest[i];
+        if (valued[a]) {
+          if (rest[i + 1] == null) throw new Error(`console: ${a} needs a value`);
+          p[valued[a]] = rest[i + 1];
+          i += 1;
+        } else if (a === "--clear") p.clear = true;
+        else if (a === "--text") asText = true;
+        else throw new Error(`console: unexpected argument "${a}"`);
+      }
+      for (const k of ["since", "limit", "wait"]) {
+        if (p[k] == null) continue;
+        const n = Number(p[k]);
+        if (!Number.isFinite(n) || n < 0) throw new Error(`console: --${k} expects a non-negative number, got "${p[k]}"`);
+        p[k] = n;
+      }
+      if (p.wait) await new Promise((resolve) => setTimeout(resolve, p.wait));
+      delete p.wait;
+      const result = await command("page.console", withTab(p, tabId));
+      if (!asText) {
+        printResult(result);
+        return;
+      }
+      const head = `# tab ${result.tabId} ${result.url} — ${result.returned} of ${result.total} message(s), lastSeq ${result.lastSeq}`;
+      const lines = [head];
+      if (result.note) lines.push(`# ${result.note}`);
+      for (const m of result.messages) {
+        const d = new Date(m.time); // local time HH:MM:SS.mmm (the JSON output keeps UTC ISO)
+        const pad = (n, w = 2) => String(n).padStart(w, "0");
+        const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+        const body = String(m.text).split("\n");
+        lines.push(`${String(m.seq).padStart(4)} ${time} ${m.level.toUpperCase().padEnd(5)} ${body[0]}`);
+        for (const more of body.slice(1)) lines.push(`${" ".repeat(18)}${more}`);
+      }
+      console.log(lines.join("\n"));
       return;
     }
     case "scroll":

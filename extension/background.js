@@ -1280,6 +1280,22 @@ async function handleCommand(message) {
       }
     }
 
+    // Console output of a tab (console.*, uncaught errors, failed loads, rejected promises,
+    // CSP violations), kept across navigations. See the console capture section above.
+    case "page.console": {
+      const tab = await tabById(params.tabId);
+      return readConsole(tab, params);
+    }
+
+    case "page.consoleClear": {
+      const tab = await tabById(params.tabId);
+      const st = await consoleState(tab.id);
+      const cleared = st.entries.length;
+      st.entries = [];
+      consoleSave(tab.id);
+      return { tabId: tab.id, cleared, lastSeq: st.seq };
+    }
+
     case "ext.reload":
       // Dev loop: pick up edits to manifest/background/content without
       // clicking the reload arrow on chrome://extensions.
@@ -1337,13 +1353,162 @@ async function handleCommand(message) {
   }
 }
 
+// ---- console capture ----------------------------------------------------------
+// console-hook.js (page world) and console-bridge.js (isolated world) send every console
+// entry here as it happens. We keep a ring buffer per tab that
+//   - survives navigation: a click that leaves the page must not take its log with it;
+//   - survives this worker being put to sleep (mirrored to chrome.storage.session).
+// Each entry gets a per-tab sequence number so `console --since N` reads incrementally.
+const CONSOLE_MAX = 1000;
+const consoleLogs = new Map(); // tabId -> { seq, entries, src: { pid, seq } }
+const consoleLoading = new Map(); // tabId -> Promise, so concurrent first messages share one load
+const consoleSaveTimers = new Map();
+
+function consoleState(tabId) {
+  const have = consoleLogs.get(tabId);
+  if (have) return Promise.resolve(have);
+  let pending = consoleLoading.get(tabId);
+  if (!pending) {
+    pending = (async () => {
+      let st = { seq: 0, entries: [], src: { pid: null, seq: 0 } };
+      if (chrome.storage.session) {
+        try {
+          const key = `console:${tabId}`;
+          const got = await chrome.storage.session.get(key);
+          if (got[key]) st = got[key];
+        } catch {}
+      }
+      consoleLogs.set(tabId, st);
+      consoleLoading.delete(tabId);
+      return st;
+    })();
+    consoleLoading.set(tabId, pending);
+  }
+  return pending;
+}
+
+function consoleSave(tabId) {
+  if (!chrome.storage.session || consoleSaveTimers.has(tabId)) return;
+  consoleSaveTimers.set(
+    tabId,
+    setTimeout(() => {
+      consoleSaveTimers.delete(tabId);
+      const st = consoleLogs.get(tabId);
+      if (st) chrome.storage.session.set({ [`console:${tabId}`]: st }).catch(() => {});
+    }, 300)
+  );
+}
+
+async function consoleAdd(tabId, raw) {
+  const st = await consoleState(tabId);
+  // The bridge can be (re)attached to a page that has already logged, and the hook replays its
+  // buffer to it. Within one page load (pid) entries arrive in order, so drop what we have.
+  if (raw.pid) {
+    if (st.src.pid === raw.pid && raw.seq <= st.src.seq) return;
+    st.src = { pid: raw.pid, seq: raw.seq };
+  }
+  st.entries.push({
+    seq: ++st.seq,
+    t: raw.t || Date.now(),
+    level: String(raw.level || "log"),
+    text: String(raw.text ?? ""),
+    url: raw.url,
+    kind: raw.kind,
+  });
+  if (st.entries.length > CONSOLE_MAX) st.entries.splice(0, st.entries.length - CONSOLE_MAX);
+  consoleSave(tabId);
+}
+
+// Make sure the hook and the bridge are in this tab. Tabs opened after the extension loaded get
+// them from the manifest at document_start. A tab that was already open has neither, so inject
+// now: that captures what is logged from this moment on (it cannot recover earlier output).
+// The bridge is always injected: it is idempotent within one extension instance, and after an
+// extension reload the old bridge is orphaned, so a fresh one is needed to keep forwarding.
+async function ensureConsoleHook(tab) {
+  const [{ result: present } = {}] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "MAIN",
+    func: () => typeof globalThis.__bscConsoleHook !== "undefined",
+  });
+  if (!present) {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: "MAIN", files: ["console-hook.js"] });
+  }
+  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["console-bridge.js"] });
+  return { hooked: true, late: !present };
+}
+
+function consoleMatcher(grep) {
+  if (!grep) return null;
+  const m = /^\/(.+)\/([a-z]*)$/.exec(grep);
+  if (m) {
+    try {
+      const re = new RegExp(m[1], m[2].includes("i") ? m[2] : `${m[2]}i`);
+      return (text) => re.test(text);
+    } catch {}
+  }
+  const needle = String(grep).toLowerCase();
+  return (text) => text.toLowerCase().includes(needle);
+}
+
+async function readConsole(tab, params) {
+  const hook = await ensureConsoleHook(tab);
+  const st = await consoleState(tab.id);
+  let rows = st.entries;
+  if (params.since != null) rows = rows.filter((e) => e.seq > Number(params.since));
+  if (params.level && String(params.level).toLowerCase() !== "all") {
+    const want = new Set(String(params.level).toLowerCase().split(",").map((s) => s.trim()).filter(Boolean));
+    rows = rows.filter((e) => want.has(e.level));
+  }
+  const match = consoleMatcher(params.grep);
+  if (match) rows = rows.filter((e) => match(e.text));
+  const total = rows.length;
+  const limit = Math.max(1, Number(params.limit) || 200);
+  rows = rows.slice(-limit);
+  if (params.clear) {
+    st.entries = [];
+    consoleSave(tab.id);
+  }
+  return {
+    tabId: tab.id,
+    url: tab.url,
+    hooked: hook.hooked,
+    hookedLate: hook.late,
+    ...(hook.late
+      ? {
+          note:
+            "Console capture was just attached to this already-open page, so only output from now on is recorded. " +
+            "Reload the tab (or open the page fresh) to capture everything from page start.",
+        }
+      : {}),
+    lastSeq: st.seq,
+    total,
+    returned: rows.length,
+    messages: rows.map((e) => ({
+      seq: e.seq,
+      time: new Date(e.t).toISOString(),
+      level: e.level,
+      text: e.text,
+      ...(e.kind ? { kind: e.kind } : {}),
+      ...(e.kind === "page" ? { url: e.url } : {}),
+    })),
+  };
+}
+
 const PLUGIN_COMMANDS = new Set([
   "page.snapshot", "page.text", "page.options", "page.click", "page.type", "page.press",
   "page.scroll", "page.scrollTrusted", "page.status", "page.annotate", "react.call", "angular.call", "page.images",
+  "page.console",
 ]);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return;
+
+  // One console entry from console-bridge.js. Top frame only; no response is sent.
+  if (message.type === "bsc-console") {
+    const tabId = sender.tab?.id;
+    if (tabId != null && sender.frameId === 0 && message.entry) consoleAdd(tabId, message.entry).catch(() => {});
+    return;
+  }
 
   // Plugins (isolated-world code) reach the core commands through this. The
   // tab is always the sender's, and only page-level commands are allowed.
@@ -1414,6 +1579,10 @@ async function boot() {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   setTabAnnotate(tabId, false).catch(() => {});
+  consoleLogs.delete(tabId);
+  clearTimeout(consoleSaveTimers.get(tabId));
+  consoleSaveTimers.delete(tabId);
+  if (chrome.storage.session) chrome.storage.session.remove(`console:${tabId}`).catch(() => {});
 });
 
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {

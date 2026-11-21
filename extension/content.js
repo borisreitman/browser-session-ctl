@@ -1093,6 +1093,11 @@
     // Returns { x, y, scroller, before, after, moved }. Note: chat-style panes can
     // use a negative scrollTop (0 is the newest end), so read `moved`, not the sign.
     scrollTrusted: (opts = {}) => bscCommand("page.scrollTrusted", opts),
+    // What this tab has logged to the console (see `browser-session-ctl console`), kept across
+    // navigations. Async.
+    //   const r = await bsc.console({ level: "error,warn", grep: "gtag", since: 40, limit: 50 })
+    // Returns { lastSeq, total, returned, messages: [{ seq, time, level, text }] }.
+    console: (opts = {}) => bscCommand("page.console", opts),
     command: bscCommand, // page-level only: page.* and react.call
     status: () => bscCommand("page.status"),
     snapshot: async () => snapshot(),

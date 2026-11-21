@@ -1,6 +1,6 @@
 # Google Ads: Keyword Planner
 
-`plugins/google-ads.js` automates **Keyword Planner → Discover new keywords** on ads.google.com. It is read-only: it runs searches and reads the results, and never saves a plan or touches a campaign.
+`plugins/google-ads.js` automates **Keyword Planner → Discover new keywords** on ads.google.com. Those methods are read-only: they run searches and read the results, and never save a plan or touch a campaign. Three general helpers (`reveal`, `fill`, `follow`) work on any ads.google.com page; see [General helpers](#general-helpers-for-any-adsgooglecom-page), because `fill` writes.
 
 ```bash
 browser-session-ctl --profile ads plugin.google-ads search "trail running shoes, hoka"
@@ -23,6 +23,22 @@ A row looks like:
 ```
 
 Volumes are ranges, not counts: an account without ad spend only gets Google's coarse buckets.
+
+## General helpers for any ads.google.com page
+
+The Keyword Planner methods above are read-only. Three more methods work on any ads.google.com page (campaign wizard, settings, conversions), where plain `snapshot` / `click` / `type` fall short:
+
+```bash
+browser-session-ctl plugin.google-ads reveal "Save and continue"                 # scroll it into view
+browser-session-ctl plugin.google-ads fill Headline 2 "Supports Anthem Liberty"  # write the 3rd Headline field
+browser-session-ctl plugin.google-ads follow "ALF - Shop button click"           # click that <a> link
+```
+
+- **`reveal <text>`** scrolls the smallest element containing the text into view, inside whatever nested scroller holds it. The campaign wizard scrolls an inner panel, so plain `scroll` does nothing there, and `snapshot` only lists controls that are on screen: reveal first, then snapshot. It changes nothing but the viewport.
+- **`fill <label> <index> <value...>`** **writes**: it sets the Nth (0-based) input or textarea whose placeholder, aria-label or label *starts with* `<label>`, even when it is scrolled off screen (the repeated `Headline` / `Description` fields, the `Enter or paste keywords` box), and **replaces the field's whole value**. There is no read mode: never call it just to look at a field (a loop that did so once overwrote seven headlines with placeholder text). It saves nothing by itself; the page's own Save / Done button still has to be clicked.
+- **`follow <text>`** clicks the `<a>` whose text equals `<text>` and returns its `href`. Plain `click <text>` takes the first element containing the text, which on the conversions list is the same-named "Edit this Conversion action" button, not the link.
+
+Things the wizard does that you should expect when scripting it: the Final URL, display paths, headlines, descriptions and keywords of a new ad group are **prefilled from another page or ad group**, so set them all; Google also adds **sitelinks** you did not ask for (remove them); entering keywords in the new-ad-group form did not persist for us, so add them afterwards from the keywords page and check the keyword count; and saving some changes (a budget, for instance) asks you to re-verify your Google sign-in with a "Confirm it's you" dialog, which a person has to complete.
 
 ## How the site is built
 
