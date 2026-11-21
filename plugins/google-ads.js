@@ -38,10 +38,81 @@ class Plugin {
         stable: "stable — wait for Angular to settle and report whether it did (debug).",
         reveal:
           "reveal <text...> — scroll the smallest element whose text contains <text> into view, inside whatever nested scroller holds it (the campaign wizard scrolls an inner panel that plain `scroll` can't reach). Works on any ads.google.com page; changes nothing but the viewport.",
+        hover:
+          "hover <text...> — send the mouse-over events a real hover would to the smallest element containing <text> (and its ancestors), so controls a page only renders on hover (a table row's pencil) appear. Then `snapshot`.",
+        pressLabel:
+          "pressLabel <aria-label prefix> [index] — click the Nth element whose aria-label starts with the prefix, even when not visible. Returns how many matched and the label it hit, so you can check the row (an \"Edit this Ad,\" label carries the ad's final URL).",
+        follow:
+          "follow <text...> — click the <a> whose text equals <text> and return its href. Beware: in the Ads ad table an ad's title link opens its final URL in a new tab, it does not edit the ad.",
+        fields:
+          "fields <label> — READ-ONLY: list the inputs/textareas whose placeholder, aria-label or label starts with <label>, with index and current value. Use it to look at a form before `fill`.",
         fill:
           'fill <label> <index> <value...> — WRITES: set the Nth (0-based) input/textarea whose placeholder, aria-label or label starts with <label>, even when scrolled off screen (the wizard\'s repeated Headline/Description fields, the "Enter or paste keywords" box). Replaces the field\'s whole value.',
       },
     };
+  }
+
+  // Send the mouse-over events a real hover would (mouseover/mouseenter/mousemove) to the
+  // smallest element whose text contains `text`, and to its ancestors, so controls that a
+  // page only renders on hover (a table row's pencil) appear. CSS :hover cannot be forced,
+  // but Material tables decide by events.
+  // Usage: hover "It Is a Sin to Write This"
+  hover(...parts) {
+    const want = parts.join(" ").trim().toLowerCase();
+    let best = null;
+    for (const el of document.querySelectorAll("body *")) {
+      if (el.children.length > 8) continue;
+      const t = (el.textContent || "").trim().toLowerCase();
+      if (!t || !t.includes(want)) continue;
+      if (!best || t.length < (best.textContent || "").trim().length) best = el;
+    }
+    if (!best) return { ok: false, text: want };
+    best.scrollIntoView({ block: "center" });
+    const r = best.getBoundingClientRect();
+    const init = { bubbles: true, cancelable: true, composed: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    let n = 0;
+    for (let el = best; el && el !== document.body && n < 8; el = el.parentElement, n += 1) {
+      for (const type of ["mouseover", "mouseenter", "mousemove"]) el.dispatchEvent(new MouseEvent(type, { ...init, bubbles: type !== "mouseenter" }));
+    }
+    return { ok: true, tag: best.tagName.toLowerCase(), ancestors: n };
+  }
+
+  // Click the Nth (0-based) element whose aria-label STARTS WITH `label`, even when it is
+  // not visible: Material tables only show a row's pencil on hover, so `snapshot` does not
+  // list it. Returns how many matched, so a caller can check it hit the right row (the
+  // label of an "Edit this Ad" button carries the ad's final URL and id).
+  // Usage: pressLabel "Edit this Ad," 2
+  pressLabel(label, index = 0) {
+    const want = String(label).trim().toLowerCase();
+    const els = [...document.querySelectorAll("[aria-label]")].filter((e) =>
+      (e.getAttribute("aria-label") || "").trim().toLowerCase().startsWith(want)
+    );
+    const el = els[Number(index)];
+    if (!el) return { ok: false, label, index: Number(index), candidates: els.length };
+    const aria = el.getAttribute("aria-label");
+    bsc.fireClick(el);
+    return { ok: true, candidates: els.length, ariaLabel: aria.length > 220 ? `${aria.slice(0, 220)}...` : aria };
+  }
+
+  // Read-only companion to `fill`: list the text inputs/textareas whose placeholder,
+  // aria-label or label starts with `label`, with their current values. Use this to
+  // look at a form; `fill` replaces a value and must never be used for that.
+  // Usage: fields Headline      ->  [{ index: 0, value: "EGO Hoodie & Tees", length: 17 }, ...]
+  fields(label) {
+    const want = String(label).trim().toLowerCase();
+    const name = (el) =>
+      (
+        el.getAttribute("aria-label") ||
+        el.getAttribute("placeholder") ||
+        el.closest("material-input, .input-container")?.textContent ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+    const els = [...document.querySelectorAll("input, textarea")].filter(
+      (el) => el.type !== "hidden" && name(el).startsWith(want)
+    );
+    return { label, count: els.length, fields: els.map((el, index) => ({ index, value: el.value, length: el.value.length })) };
   }
 
   // Set the Nth (0-based) text input or textarea whose placeholder, aria-label
